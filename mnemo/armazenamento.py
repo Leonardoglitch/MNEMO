@@ -13,7 +13,7 @@ import os
 import shutil
 from datetime import datetime
 
-from permissoes import Permissoes, PermissaoNegada  # noqa: F401
+from .permissoes import Permissoes, PermissaoNegada  # noqa: F401
 
 
 def _carimbo():

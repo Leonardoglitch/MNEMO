@@ -1,0 +1,27 @@
+# Python cache
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+
+# pytest
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Virtual environments
+.venv/
+venv/
+env/
+
+# Environment variables
+.env
+
+# Vault generated files
+**/.vault/index.db
+.backups/
+.lixo/
+
+# OS
+.DS_Store
+Thumbs.db
