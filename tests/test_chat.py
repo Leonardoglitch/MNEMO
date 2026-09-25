@@ -138,3 +138,64 @@ def test_varias_chamadas_de_ferramentas_na_mesma_resposta(vault):
 
     ids_respondidos = [m["tool_call_id"] for m in mensagens if m.get("role") == "tool"]
     assert ids_respondidos == ["a", "b"]
+
+
+# --- testes de persistência de histórico ---
+
+@pytest.fixture
+def vault_com_historico(tmp_path):
+    """Vault temporário com pasta 'historico' permitida."""
+    nota = tmp_path / "notas" / "projetos" / "orcamento.md"
+    nota.parent.mkdir(parents=True)
+    nota.write_text("O orçamento é de mil euros.\n", encoding="utf-8")
+    (tmp_path / ".vault").mkdir()
+    (tmp_path / ".vault" / "config.json").write_text(
+        json.dumps({
+            "versao": 1,
+            "todas_as_pastas": False,
+            "pastas_permitidas": ["projetos", "historico"]
+        }),
+        encoding="utf-8",
+    )
+    with FerramentasVault(tmp_path) as v:
+        yield v
+
+
+def test_salvar_historico_cria_nota_com_tool_calls(vault_com_historico):
+    mensagens = [
+        {"role": "system", "content": "sys"},
+        {"role": "user", "content": "procura orçamento"},
+        {
+            "role": "assistant",
+            "content": None,
+            "tool_calls": [
+                {"id": "call_1", "type": "function", "function": {"name": "search", "arguments": json.dumps({"consulta": "orçamento"})}}
+            ]
+        },
+        {
+            "role": "tool",
+            "tool_call_id": "call_1",
+            "content": json.dumps({"ok": True, "resultados": [{"caminho": "projetos/orcamento.md", "titulo": "Orçamento"}]}),
+        },
+        {"role": "assistant", "content": "Encontrei."}
+    ]
+
+    chat._salvar_historico(mensagens, str(vault_com_historico.armazenamento.perms.raiz))
+
+    # Verifica que a nota foi criada em historico/
+    historico_dir = vault_com_historico.armazenamento.perms.raiz / "notas" / "historico"
+    arquivos = list(historico_dir.glob("*.md"))
+    assert len(arquivos) == 1
+    conteudo = arquivos[0].read_text(encoding="utf-8")
+    assert "# Conversa" in conteudo
+    assert "procura orçamento" in conteudo
+    assert "Tool call" in conteudo
+    assert "search" in conteudo
+    assert "Tool result" in conteudo
+    assert "call_1" in conteudo
+
+
+def test_historico_folder_permissions(vault_com_historico):
+    # A pasta historico deve estar nas permitidas
+    perms = vault_com_historico.armazenamento.perms
+    assert "historico" in [str(p.relative_to(perms.notas)) for p in perms.raizes_permitidas()]

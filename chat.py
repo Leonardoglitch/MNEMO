@@ -29,10 +29,13 @@ INSTRUCAO_SISTEMA = (
     "conteúdo de uma nota que não leste. Responde sempre em português.\n\n"
     "Regras para create_note:\n"
     "- O caminho deve ser relativo a notas/ e incluir uma pasta permitida\n"
-    "- Pastas permitidas: projetos/, estudo/\n"
+    "- Pastas permitidas: projetos/, estudo/, historico/\n"
     "- O nome do ficheiro deve terminar em .md\n"
     "- Exemplo correto: projetos/meu-plano.md\n"
-    "- Se o utilizador der só um nome (ex.: 'plano'), pergunta em que pasta ou sugere projetos/"
+    "- Se o utilizador der só um nome (ex.: 'plano'), pergunta em que pasta ou sugere projetos/\n\n"
+    "Comandos especiais:\n"
+    "- `/salvar` — grava checkpoint da conversa em historico/\n"
+    "- Ao sair, o histórico é gravado automaticamente em historico/\n"
 )
 
 
@@ -82,6 +85,42 @@ def executar_ciclo_ferramentas(cliente, vault, mensagens):
     return "(demasiados pedidos de ferramentas seguidos — parei para não entrar em ciclo)"
 
 
+def _salvar_historico(mensagens, raiz_vault):
+    """Grava histórico completo (incl. tool calls) em historico/YYYY-MM-DD_HH-MM.md"""
+    from datetime import datetime
+    from mnemo import FerramentasVault
+
+    ts = datetime.now().strftime("%Y-%m-%d_%H-%M")
+    caminho = f"historico/{ts}.md"
+
+    linhas = [f"# Conversa {ts}\n"]
+    for m in mensagens:
+        if m["role"] == "system":
+            continue
+
+        role_label = "🧑 Tu" if m["role"] == "user" else "🤖 Mnemo"
+        content = m.get("content") or ""
+
+        # Incluir tool calls se existirem
+        if m.get("tool_calls"):
+            for tc in m["tool_calls"]:
+                fn = tc["function"]["name"]
+                args = tc["function"]["arguments"]
+                content += f"\n\n> **Tool call:** `{fn}`({args})"
+
+        # Incluir resultado de tool se for role="tool"
+        if m["role"] == "tool":
+            content = f"> **Tool result** (`{m.get('tool_call_id')}`):\n```json\n{content}\n```"
+
+        if content.strip():
+            linhas.append(f"## {role_label}\n{content}\n")
+
+    conteudo = "\n".join(linhas)
+
+    with FerramentasVault(raiz_vault) as v:
+        v.executar("create_note", {"caminho": caminho, "conteudo": conteudo})
+
+
 def main():
     parser = argparse.ArgumentParser(description="Conversa com o Nemotron ligado ao Vault do Mnemo.")
     parser.add_argument(
@@ -109,11 +148,18 @@ def main():
             try:
                 texto = input("Tu: ").strip()
             except (EOFError, KeyboardInterrupt):
-                print()
+                print("\n[Saindo... a gravar histórico]")
+                _salvar_historico(mensagens, args.vault)
                 break
             if texto.lower() in {"sair", "exit", "quit"}:
+                _salvar_historico(mensagens, args.vault)
                 break
             if not texto:
+                continue
+
+            if texto == "/salvar":
+                _salvar_historico(mensagens, args.vault)
+                print("✓ Conversa gravada em historico/\n")
                 continue
 
             if texto.startswith("/modelo "):
@@ -128,6 +174,7 @@ def main():
             if texto.lower() in {"/ajuda", "/help"}:
                 print("Comandos disponíveis:")
                 print("  /modelo <nome>   Troca o modelo (ex.: /modelo nvidia/nemotron-3-ultra)")
+                print("  /salvar          Grava checkpoint da conversa em historico/")
                 print("  /ajuda           Mostra esta ajuda")
                 print("  sair / exit / quit   Termina a conversa\n")
                 continue
