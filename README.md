@@ -47,13 +47,15 @@ cd MNEMO
 cp .env.example .env
 # edite .env e insira sua chave:
 # NVIDIA_API_KEY=nvapi-...
+# Opcional: escolha o modelo (padrão: nvidia/nemotron-3-super-120b-a12b)
+# NVIDIA_MODEL=nvidia/nemotron-3-ultra
 ```
 
 ## Testes
 
 ```bash
 python -m pytest tests/ -v
-# 35 testes: permissões, índice, modelo NVIDIA, chat, ferramentas
+# 38 testes: permissões, índice, modelo NVIDIA, chat, ferramentas
 ```
 
 ## Uso Rápido
@@ -62,11 +64,32 @@ python -m pytest tests/ -v
 # Indexar vault de teste
 python -c "from mnemo import Permissoes, Indexador; i=Indexador(Permissoes('vault-teste')); print(i.reindexar_tudo())"
 
-# Chat interativo
+# Chat interativo (modelo padrão)
 python chat.py --vault vault-teste
-# Tu: procura orçamento
-# Mnemo: [resultados da pesquisa] ...
+
+# Chat com modelo específico via CLI
+python chat.py --vault vault-teste --modelo nvidia/nemotron-3-ultra
+
+# Ou defina NVIDIA_MODEL no .env e use apenas:
+python chat.py --vault vault-teste
 ```
+
+### Trocar modelo durante a conversa
+
+No REPL, use o comando:
+```
+/modelo nvidia/nemotron-3-ultra
+```
+
+Modelos disponíveis na NVIDIA:
+- `nvidia/nemotron-3-ultra` — maior, mais capaz
+- `nvidia/nemotron-3-super-120b-a12b` — **padrão**, equilíbrio custo/qualidade
+- `nvidia/nemotron-4-340b-instruct` — novo, bom para tool-calling
+- `nvidia/llama-3.1-nemotron-70b-instruct` — pesos abertos
+
+Outros comandos REPL:
+- `/ajuda` — lista comandos
+- `sair` / `exit` / `quit` — termina
 
 ## Componentes Principais
 

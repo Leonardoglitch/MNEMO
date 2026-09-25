@@ -81,12 +81,17 @@ def main():
     parser.add_argument(
         "--vault", default="vault-teste", help="Pasta raiz do vault (padrão: vault-teste)"
     )
+    parser.add_argument(
+        "--modelo", default=None, help="ID do modelo NVIDIA (ex.: nvidia/nemotron-3-ultra). Padrão: env NVIDIA_MODEL ou nemotron-3-super-120b-a12b"
+    )
     args = parser.parse_args()
 
     carregar_env()
 
+    modelo = args.modelo or os.environ.get("NVIDIA_MODEL")
+
     try:
-        cliente = ClienteNVIDIA()
+        cliente = ClienteNVIDIA(modelo=modelo) if modelo else ClienteNVIDIA()
     except ErroModeloNVIDIA as e:
         print(f"Erro: {e}", file=sys.stderr)
         sys.exit(1)
@@ -103,6 +108,22 @@ def main():
             if texto.lower() in {"sair", "exit", "quit"}:
                 break
             if not texto:
+                continue
+
+            if texto.startswith("/modelo "):
+                novo_modelo = texto.split(" ", 1)[1].strip()
+                try:
+                    cliente = ClienteNVIDIA(modelo=novo_modelo)
+                    print(f"Modelo alterado para: {novo_modelo}\n")
+                except ErroModeloNVIDIA as e:
+                    print(f"Erro ao trocar modelo: {e}\n")
+                continue
+
+            if texto.lower() in {"/ajuda", "/help"}:
+                print("Comandos disponíveis:")
+                print("  /modelo <nome>   Troca o modelo (ex.: /modelo nvidia/nemotron-3-ultra)")
+                print("  /ajuda           Mostra esta ajuda")
+                print("  sair / exit / quit   Termina a conversa\n")
                 continue
 
             mensagens.append({"role": "user", "content": texto})
