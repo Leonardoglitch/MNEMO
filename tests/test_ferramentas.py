@@ -135,3 +135,40 @@ def test_create_note_sem_extensao_md_retorna_sugestao(vault):
     assert res["ok"] is False
     assert res["erro"] == "Só são permitidas notas .md"
     assert res.get("sugestao") == "use caminho terminado em .md"
+
+
+def test_create_note_caminho_sem_pasta_retorna_sugestao(vault):
+    res = vault.executar("create_note", {"caminho": "arquivo.md", "conteudo": "x"})
+    assert res["ok"] is False
+    assert "Caminho deve incluir pasta" in res["erro"]
+    assert "pastas_permitidas" in res
+    assert "projetos" in res["pastas_permitidas"]
+    assert "estudo" in res["pastas_permitidas"]
+    assert res.get("exemplo") == "projetos/arquivo.md"
+
+
+def test_create_note_caminho_pasta_nao_permitida_retorna_sugestao(vault):
+    res = vault.executar("create_note", {"caminho": "pessoal/arquivo.md", "conteudo": "x"})
+    assert res["ok"] is False
+    assert "Pasta 'pessoal' não permitida" in res["erro"]
+    assert "pastas_permitidas" in res
+    assert "projetos" in res["pastas_permitidas"]
+    assert "estudo" in res["pastas_permitidas"]
+
+
+def test_create_note_caminho_valido_cria_com_sucesso(vault):
+    res = vault.executar("create_note", {"caminho": "projetos/novo.md", "conteudo": "# Novo\nConteúdo.\n"})
+    assert res["ok"] is True
+    assert res["caminho"] == "projetos/novo.md"
+    # Verifica que a nota foi criada e indexada
+    res2 = vault.executar("search", {"consulta": "Novo"})
+    assert res2["ok"] is True
+    assert any(r["caminho"] == "projetos/novo.md" for r in res2["resultados"])
+
+
+def test_create_note_caminho_com_espacos_rejeitado(vault):
+    # Espaços no nome devem ser rejeitados (não sanitizados automaticamente)
+    res = vault.executar("create_note", {"caminho": "projetos/meu arquivo.md", "conteudo": "x"})
+    assert res["ok"] is False
+    # O armazenamento rejeita por causa do ValueError do .md check (tem espaço antes de .md)
+    # ou pela validação de caminho
