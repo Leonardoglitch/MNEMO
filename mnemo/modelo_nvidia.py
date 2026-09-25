@@ -36,13 +36,13 @@ def esquema_openai(descricao_ferramenta):
 
 
 class ClienteNVIDIA:
-    def __init__(self, chave_api=None, modelo=MODELO_PADRAO, url_base=URL_BASE, ativar_pensamento=False):
+    def __init__(self, chave_api=None, modelo=None, url_base=URL_BASE, ativar_pensamento=False):
         self.chave_api = chave_api or os.environ.get("NVIDIA_API_KEY")
         if not self.chave_api:
             raise ErroModeloNVIDIA(
                 "Falta a variável de ambiente NVIDIA_API_KEY com a chave da API da NVIDIA."
             )
-        self.modelo = modelo
+        self.modelo = modelo or os.environ.get("NVIDIA_MODEL") or MODELO_PADRAO
         self.url_base = url_base
         self.ativar_pensamento = ativar_pensamento
 
