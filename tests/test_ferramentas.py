@@ -109,4 +109,29 @@ def test_create_note_caminho_invalido_sem_md(vault):
 def test_append_to_note_inexistente(vault):
     res = vault.executar("append_to_note", {"caminho": "projetos/nao_existe.md", "texto": "x"})
     assert res["ok"] is False
-    assert "não existe" in res["erro"] or "Nota não existe" in res["erro"]
+    # error message updated to "Nota não encontrada."
+    assert "não encontrada" in res["erro"] or "não existe" in res["erro"] or "Nota não existe" in res["erro"]
+
+
+def test_create_note_ja_existe_retorna_sugestao_append(vault):
+    # cria nota
+    vault.executar("create_note", {"caminho": "projetos/duplicada.md", "conteudo": "Início.\n"})
+    # tenta criar novamente
+    res = vault.executar("create_note", {"caminho": "projetos/duplicada.md", "conteudo": "Outro.\n"})
+    assert res["ok"] is False
+    assert res["erro"] == "Nota já existe."
+    assert res.get("sugestao") == "append_to_note"
+
+
+def test_read_note_inexistente_retorna_sugestao_create(vault):
+    res = vault.executar("read_note", {"caminho": "projetos/nao_existe.md"})
+    assert res["ok"] is False
+    assert res["erro"] == "Nota não encontrada."
+    assert res.get("sugestao") == "create_note"
+
+
+def test_create_note_sem_extensao_md_retorna_sugestao(vault):
+    res = vault.executar("create_note", {"caminho": "projetos/sem_extensao", "conteudo": "x"})
+    assert res["ok"] is False
+    assert res["erro"] == "Só são permitidas notas .md"
+    assert res.get("sugestao") == "use caminho terminado em .md"

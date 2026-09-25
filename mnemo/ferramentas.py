@@ -88,6 +88,13 @@ class FerramentasVault:
             return {"ok": False, "erro": f"Ferramenta desconhecida: {nome}"}
         except PermissaoNegada as e:
             return {"ok": False, "erro": str(e)}
+        except FileExistsError as e:
+            return {"ok": False, "erro": "Nota já existe.", "sugestao": "append_to_note"}
+        except FileNotFoundError as e:
+            return {"ok": False, "erro": "Nota não encontrada.", "sugestao": "create_note"}
+        except ValueError as e:
+            # only extension check raises ValueError with specific message
+            return {"ok": False, "erro": "Só são permitidas notas .md", "sugestao": "use caminho terminado em .md"}
         except Exception as e:  # pylint: disable=broad-except
             return {"ok": False, "erro": f"Erro interno: {e}"}
 
