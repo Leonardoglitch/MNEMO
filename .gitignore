@@ -16,6 +16,7 @@ env/
 
 # Environment variables
 .env
+env.example
 
 # Vault generated files
 **/.vault/index.db
