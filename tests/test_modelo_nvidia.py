@@ -124,3 +124,194 @@ def test_resposta_sem_choices_da_erro_claro(monkeypatch):
     )
     with pytest.raises(ErroModeloNVIDIA, match="Resposta inesperada"):
         ClienteNVIDIA().conversar([{"role": "user", "content": "oi"}])
+
+
+# --- Novos testes para retry, fallback, streaming, health_check ---
+
+class RespostaFalsaStream:
+    """Simula resposta de streaming (Server-Sent Events)."""
+    def __init__(self, chunks):
+        self.chunks = chunks
+        self.index = 0
+
+    def __iter__(self):
+        return self
+
+    def __next__(self):
+        if self.index >= len(self.chunks):
+            raise StopIteration
+        chunk = self.chunks[self.index]
+        self.index += 1
+        # Formato SSE: "data: {json}\n\n"
+        return f"data: {json.dumps(chunk)}\n\n".encode("utf-8")
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *_):
+        return False
+
+
+def test_retry_em_erro_5xx(monkeypatch):
+    """Deve tentar 3 vezes antes de falhar em erro 500."""
+    monkeypatch.setenv("NVIDIA_API_KEY", "chave-de-teste")
+    chamadas = []
+
+    def urlopen_falha_500(pedido, timeout=60):
+        chamadas.append(1)
+        raise mod.urllib.error.HTTPError(
+            mod.URL_BASE, 500, "Internal Server Error", {}, io.BytesIO(b'{"error":"server error"}')
+        )
+
+    monkeypatch.setattr(mod.urllib.request, "urlopen", urlopen_falha_500)
+
+    # Apenas um modelo para testar retry sem fallback
+    cliente = ClienteNVIDIA(max_retries=3, base_delay=0.01, fallback_models=[])
+    with pytest.raises(ErroModeloNVIDIA):
+        cliente.conversar([{"role": "user", "content": "oi"}])
+
+    assert len(chamadas) == 3  # 3 tentativas
+
+
+def test_retry_em_erro_429(monkeypatch):
+    """Deve tentar novamente em erro 429 (rate limit)."""
+    monkeypatch.setenv("NVIDIA_API_KEY", "chave-de-teste")
+    chamadas = []
+
+    def urlopen_429_duas_vezes(pedido, timeout=60):
+        chamadas.append(1)
+        if len(chamadas) < 3:
+            raise mod.urllib.error.HTTPError(
+                mod.URL_BASE, 429, "Rate Limited", {}, io.BytesIO(b'{"error":"rate limit"}')
+            )
+        return RespostaFalsa({"choices": [{"message": {"role": "assistant", "content": "ok"}}]})
+
+    monkeypatch.setattr(mod.urllib.request, "urlopen", urlopen_429_duas_vezes)
+
+    cliente = ClienteNVIDIA(max_retries=3, base_delay=0.01)
+    resposta = cliente.conversar([{"role": "user", "content": "oi"}])
+    assert resposta["content"] == "ok"
+    assert len(chamadas) == 3  # falha 2x, sucesso na 3ª
+
+
+def test_fallback_para_proximo_modelo(monkeypatch):
+    """Deve tentar modelo fallback quando o principal falha consistentemente."""
+    monkeypatch.setenv("NVIDIA_API_KEY", "chave-de-teste")
+    modelos_tentados = []
+
+    def urlopen_mock(pedido, timeout=60):
+        corpo = json.loads(pedido.data.decode("utf-8"))
+        modelos_tentados.append(corpo["model"])
+        if corpo["model"] == "modelo-principal":
+            raise mod.urllib.error.HTTPError(
+                mod.URL_BASE, 500, "Internal Server Error", {}, io.BytesIO(b'{"error":"server error"}')
+            )
+        return RespostaFalsa({"choices": [{"message": {"role": "assistant", "content": "ok fallback"}}]})
+
+    monkeypatch.setattr(mod.urllib.request, "urlopen", urlopen_mock)
+
+    cliente = ClienteNVIDIA(
+        modelo="modelo-principal",
+        fallback_models=["modelo-fallback"],
+        max_retries=1,
+        base_delay=0.01
+    )
+    resposta = cliente.conversar([{"role": "user", "content": "oi"}])
+
+    assert resposta["content"] == "ok fallback"
+    assert "modelo-principal" in modelos_tentados
+    assert "modelo-fallback" in modelos_tentados
+
+
+def test_streaming_retorna_generator(monkeypatch):
+    """Deve retornar generator quando stream=True."""
+    monkeypatch.setenv("NVIDIA_API_KEY", "chave-de-teste")
+
+    chunks = [
+        {"choices": [{"delta": {"content": "Olá"}}]},
+        {"choices": [{"delta": {"content": " mundo"}}]},
+        {"choices": [{"delta": {}}]},
+    ]
+
+    def urlopen_stream(pedido, timeout=60):
+        corpo = json.loads(pedido.data.decode("utf-8"))
+        assert corpo.get("stream") is True
+        return RespostaFalsaStream(chunks)
+
+    monkeypatch.setattr(mod.urllib.request, "urlopen", urlopen_stream)
+
+    cliente = ClienteNVIDIA()
+    generator = cliente.conversar([{"role": "user", "content": "oi"}], stream=True)
+
+    # Verifica que é um generator
+    assert hasattr(generator, "__iter__")
+    assert hasattr(generator, "__next__")
+
+    # Consome o generator
+    chunks_recebidos = list(generator)
+    assert len(chunks_recebidos) == 2  # duas deltas com conteúdo
+    assert chunks_recebidos[0]["delta"] == {"content": "Olá"}
+    assert chunks_recebidos[1]["delta"] == {"content": " mundo"}
+
+
+def test_health_check_sucesso(monkeypatch):
+    """Health check deve retornar True se API responder."""
+    monkeypatch.setenv("NVIDIA_API_KEY", "chave-de-teste")
+
+    def urlopen_ok(pedido, timeout=60):
+        return RespostaFalsa({"choices": [{"message": {"role": "assistant", "content": "pong"}}]})
+
+    monkeypatch.setattr(mod.urllib.request, "urlopen", urlopen_ok)
+
+    cliente = ClienteNVIDIA()
+    assert cliente.health_check() is True
+
+
+def test_health_check_falha(monkeypatch):
+    """Health check deve retornar False se API falhar."""
+    monkeypatch.setenv("NVIDIA_API_KEY", "chave-de-teste")
+
+    def urlopen_falha(pedido, timeout=60):
+        raise mod.urllib.error.URLError("conexão recusada")
+
+    monkeypatch.setattr(mod.urllib.request, "urlopen", urlopen_falha)
+
+    cliente = ClienteNVIDIA()
+    assert cliente.health_check() is False
+
+
+def test_timeout_configuravel(monkeypatch):
+    """Timeout deve ser passado para urlopen."""
+    monkeypatch.setenv("NVIDIA_API_KEY", "chave-de-teste")
+    timeouts_capturados = []
+
+    def urlopen_captura_timeout(pedido, timeout=60):
+        timeouts_capturados.append(timeout)
+        return RespostaFalsa({"choices": [{"message": {"role": "assistant", "content": "ok"}}]})
+
+    monkeypatch.setattr(mod.urllib.request, "urlopen", urlopen_captura_timeout)
+
+    cliente = ClienteNVIDIA(timeout=30)
+    cliente.conversar([{"role": "user", "content": "oi"}])
+
+    assert timeouts_capturados[0] == 30
+
+
+def test_nao_retry_em_erro_4xx(monkeypatch):
+    """Não deve tentar novamente em erros 4xx (exceto 429)."""
+    monkeypatch.setenv("NVIDIA_API_KEY", "chave-de-teste")
+    chamadas = []
+
+    def urlopen_400(pedido, timeout=60):
+        chamadas.append(1)
+        raise mod.urllib.error.HTTPError(
+            mod.URL_BASE, 400, "Bad Request", {}, io.BytesIO(b'{"error":"bad request"}')
+        )
+
+    monkeypatch.setattr(mod.urllib.request, "urlopen", urlopen_400)
+
+    cliente = ClienteNVIDIA(max_retries=3, base_delay=0.01)
+    with pytest.raises(ErroModeloNVIDIA):
+        cliente.conversar([{"role": "user", "content": "oi"}])
+
+    assert len(chamadas) == 1  # apenas uma tentativa, sem retry

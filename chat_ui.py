@@ -6,9 +6,10 @@ import json
 from contextlib import contextmanager
 from datetime import datetime
 from pathlib import Path
-from typing import List, Dict, Any
+from typing import List, Dict, Any, Generator
 
 from rich.console import Console
+from rich.live import Live
 from rich.markdown import Markdown
 from rich.panel import Panel
 from rich.status import Status
@@ -126,6 +127,22 @@ class ChatUI:
     def thinking(self):
         with Status("[info]A pensar...[/info]", console=self.console, spinner="dots"):
             yield
+
+    def print_streaming(self, generator) -> str:
+        """Exibe resposta em streaming com Live e retorna texto completo."""
+        full_text = ""
+        md = Markdown("")
+        with Live(md, console=self.console, refresh_per_second=10, transient=False) as live:
+            for chunk in generator:
+                if "delta" in chunk:
+                    delta = chunk["delta"]
+                    content = delta.get("content", "")
+                    if content:
+                        full_text += content
+                        # Re-render markdown with accumulated text
+                        md = Markdown(full_text)
+                        live.update(md)
+        return full_text
 
     def print_response(self, text: str) -> None:
         if not text:

@@ -63,15 +63,19 @@ def carregar_env(caminho: str = ".env") -> None:
 
 
 def executar_ciclo_ferramentas(
-    cliente: ClienteNVIDIA, vault: FerramentasVault, mensagens: List[Dict[str, Any]]
-) -> str:
+    cliente: ClienteNVIDIA, vault: FerramentasVault, mensagens: List[Dict[str, Any]], stream: bool = False
+) -> Union[str, Generator]:
     """Envia mensagens ao modelo e executa as ferramentas que ele pedir."""
     for _ in range(MAX_CICLOS_FERRAMENTAS):
-        resposta = cliente.conversar(mensagens, ferramentas=FerramentasVault.DESCRICOES)
+        # Para chamadas de ferramentas, não usar streaming (precisamos do JSON completo)
+        resposta = cliente.conversar(mensagens, ferramentas=FerramentasVault.DESCRICOES, stream=False)
         mensagens.append(resposta)
 
         pedidos = resposta.get("tool_calls")
         if not pedidos:
+            # Resposta final sem tool calls - pode usar streaming se solicitado
+            if stream:
+                return cliente.conversar(mensagens, ferramentas=None, stream=True)
             return resposta.get("content") or ""
 
         for pedido in pedidos:
@@ -168,9 +172,11 @@ def main() -> None:
         ui.config = ui.config  # no-op, garante instância
         ui.update_completer([p.rstrip("/") for p in pastas])
 
-        # health check rápido
+        # Health check rápido
         try:
-            _ = cliente.conversar([{"role": "user", "content": "ping"}], ferramentas=[])
+            if not cliente.health_check():
+                ui.print_error("Health check falhou — API indisponível.")
+                sys.exit(1)
         except Exception:
             ui.print_error("Health check falhou — API indisponível.")
             sys.exit(1)
@@ -297,12 +303,22 @@ def main() -> None:
             mensagens.append({"role": "user", "content": texto})
             try:
                 with ui.thinking():
-                    resposta = executar_ciclo_ferramentas(cliente, vault, mensagens)
+                    # Tentar com streaming primeiro
+                    resposta_gen = executar_ciclo_ferramentas(cliente, vault, mensagens, stream=True)
+                    if hasattr(resposta_gen, '__iter__') and not isinstance(resposta_gen, (str, dict)):
+                        # É um generator de streaming
+                        full_text = ui.print_streaming(resposta_gen)
+                        # Criar mensagem de resposta final para o histórico
+                        resposta_final = {"role": "assistant", "content": full_text}
+                    else:
+                        # Resposta não-streaming (fallback ou erro)
+                        resposta_final = resposta_gen
+                        ui.print_response(resposta_final.get("content", "") if isinstance(resposta_final, dict) else str(resposta_final))
+                    mensagens.append(resposta_final)
             except ErroModeloNVIDIA as e:
                 ui.print_error(str(e))
                 mensagens.pop()
                 continue
-            ui.print_response(resposta)
 
 
 if __name__ == "__main__":
