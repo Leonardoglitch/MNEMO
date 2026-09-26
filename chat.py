@@ -6,18 +6,22 @@ Uso:
     python chat.py --vault vault-teste
 
 Fica à espera de perguntas na consola. O modelo pode pedir para usar as
-ferramentas do vault (search, read_note, create_note, append_to_note); este
-programa executa-as e devolve o resultado ao modelo, até ele dar uma resposta
-em texto.
+ferramentas do vault (search, read_note, create_note, append_to_note);
+este programa executa-as e devolve o resultado ao modelo, até ele dar uma
+resposta em texto.
 """
 
 import argparse
 import json
 import os
 import sys
+from typing import List, Dict, Any
 
 from mnemo import FerramentasVault
 from mnemo.modelo_nvidia import ClienteNVIDIA, ErroModeloNVIDIA
+
+from config import Config
+from chat_ui import ChatUI
 
 MAX_CICLOS_FERRAMENTAS = 8  # trava de segurança contra um ciclo sem fim
 
@@ -35,13 +39,17 @@ INSTRUCAO_SISTEMA = (
     "- Se o utilizador der só um nome (ex.: 'plano'), pergunta em que pasta ou sugere projetos/\n\n"
     "Comandos especiais:\n"
     "- `/salvar` — grava checkpoint da conversa em historico/\n"
+    "- `/historico` — lista últimos registos\n"
+    "- `/vault` — mostra ou troca vault\n"
+    "- `/modelo` — troca modelo\n"
+    "- `/limpar` — limpa ecrã\n"
+    "- `/config` — mostra/altera configuração\n"
     "- Ao sair, o histórico é gravado automaticamente em historico/\n"
 )
 
 
-def carregar_env(caminho=".env"):
-    """Lê pares CHAVE=VALOR de um .env simples, sem depender de bibliotecas
-    externas. Não sobrescreve variáveis já definidas no ambiente."""
+def carregar_env(caminho: str = ".env") -> None:
+    """Lê pares CHAVE=VALOR de um .env simples, sem depender de bibliotecas externas."""
     try:
         with open(caminho, encoding="utf-8") as f:
             for linha in f:
@@ -54,11 +62,10 @@ def carregar_env(caminho=".env"):
         pass
 
 
-def executar_ciclo_ferramentas(cliente, vault, mensagens):
-    """Envia `mensagens` ao modelo e executa as ferramentas que ele pedir, até
-    obter uma resposta em texto (ou atingir o limite de ciclos). `mensagens`
-    é alterada no próprio local, com as respostas do modelo e das ferramentas,
-    para o histórico da conversa ficar completo."""
+def executar_ciclo_ferramentas(
+    cliente: ClienteNVIDIA, vault: FerramentasVault, mensagens: List[Dict[str, Any]]
+) -> str:
+    """Envia mensagens ao modelo e executa as ferramentas que ele pedir."""
     for _ in range(MAX_CICLOS_FERRAMENTAS):
         resposta = cliente.conversar(mensagens, ferramentas=FerramentasVault.DESCRICOES)
         mensagens.append(resposta)
@@ -85,7 +92,7 @@ def executar_ciclo_ferramentas(cliente, vault, mensagens):
     return "(demasiados pedidos de ferramentas seguidos — parei para não entrar em ciclo)"
 
 
-def _salvar_historico(mensagens, raiz_vault):
+def _salvar_historico(mensagens: List[Dict[str, Any]], raiz_vault: str) -> None:
     """Grava histórico completo (incl. tool calls) em historico/YYYY-MM-DD_HH-MM.md"""
     from datetime import datetime
     from mnemo import FerramentasVault
@@ -101,14 +108,12 @@ def _salvar_historico(mensagens, raiz_vault):
         role_label = "🧑 Tu" if m["role"] == "user" else "🤖 Mnemo"
         content = m.get("content") or ""
 
-        # Incluir tool calls se existirem
         if m.get("tool_calls"):
             for tc in m["tool_calls"]:
                 fn = tc["function"]["name"]
                 args = tc["function"]["arguments"]
                 content += f"\n\n> **Tool call:** `{fn}`({args})"
 
-        # Incluir resultado de tool se for role="tool"
         if m["role"] == "tool":
             content = f"> **Tool result** (`{m.get('tool_call_id')}`):\n```json\n{content}\n```"
 
@@ -121,72 +126,160 @@ def _salvar_historico(mensagens, raiz_vault):
         v.executar("create_note", {"caminho": caminho, "conteudo": conteudo})
 
 
-def main():
+def main() -> None:
     parser = argparse.ArgumentParser(description="Conversa com o Nemotron ligado ao Vault do Mnemo.")
-    parser.add_argument(
-        "--vault", default="vault-teste", help="Pasta raiz do vault (padrão: vault-teste)"
-    )
-    parser.add_argument(
-        "--modelo", default=None, help="ID do modelo NVIDIA (ex.: nvidia/nemotron-3-ultra). Padrão: env NVIDIA_MODEL ou nemotron-3-super-120b-a12b"
-    )
+    parser.add_argument("--vault", default=None, help="Pasta raiz do vault (padrão: config ou vault-teste)")
+    parser.add_argument("--modelo", default=None, help="ID do modelo NVIDIA")
+    parser.add_argument("--theme", default=None, choices=["auto", "dark", "light"], help="Tema de cores")
+    parser.add_argument("--save-config", action="store_true", help="Gravar vault/modelo/theme como padrão")
     args = parser.parse_args()
 
     carregar_env()
 
-    modelo = args.modelo or os.environ.get("NVIDIA_MODEL")
+    # Configuração
+    config = Config.load()
+    if args.vault:
+        config.set("vault_default", args.vault)
+    if args.modelo:
+        config.set("model_default", args.modelo)
+    if args.theme:
+        config.set("theme", args.theme)
+    if args.save_config:
+        config.save()
 
+    vault_path = config.get("vault_default", "vault-teste")
+    model_id = config.get("model_default")
+
+    # UI
+    config.set("theme", config.get("theme", "auto"))  # garante theme
+    ui = ChatUI(config)
+
+    # Health check rápido
     try:
-        cliente = ClienteNVIDIA(modelo=modelo) if modelo else ClienteNVIDIA()
+        cliente = ClienteNVIDIA(modelo=model_id) if model_id else ClienteNVIDIA()
     except ErroModeloNVIDIA as e:
-        print(f"Erro: {e}", file=sys.stderr)
+        print(f"Erro ao inicializar modelo: {e}", file=sys.stderr)
         sys.exit(1)
 
-    with FerramentasVault(args.vault) as vault:
+    # Inicializa vault e UI
+    with FerramentasVault(vault_path) as vault:
+        # atualiza completer com pastas permitidas
+        pastas = [str(p.relative_to(vault.armazenamento.perms.notas)) for p in vault.armazenamento.perms.raizes_permitidas()]
+        ui.config = ui.config  # no-op, garante instância
+        ui.update_completer([p.rstrip("/") for p in pastas])
+
+        # health check rápido
+        try:
+            _ = cliente.conversar([{"role": "user", "content": "ping"}], ferramentas=[])
+        except Exception:
+            ui.print_error("Health check falhou — API indisponível.")
+            sys.exit(1)
+
         mensagens = [{"role": "system", "content": INSTRUCAO_SISTEMA}]
-        print(f"Mnemo — ligado a '{args.vault}'. Escreve 'sair' para terminar.\n")
+        ui.welcome(vault.armazenamento.perms.raiz.name, model_id or "default")
+
         while True:
             try:
-                texto = input("Tu: ").strip()
+                texto = ui.prompt("Tu: ")
             except (EOFError, KeyboardInterrupt):
-                print("\n[Saindo... a gravar histórico]")
-                _salvar_historico(mensagens, args.vault)
+                ui.console.print("\n[Saindo... a gravar histórico]")
+                _salvar_historico(mensagens, vault_path)
                 break
-            if texto.lower() in {"sair", "exit", "quit"}:
-                _salvar_historico(mensagens, args.vault)
-                break
+
             if not texto:
                 continue
 
+            low = texto.lower()
+            if low in {"sair", "exit", "quit"}:
+                ui.console.print("[Saindo... a gravar histórico]")
+                _salvar_historico(mensagens, vault_path)
+                break
+
             if texto == "/salvar":
-                _salvar_historico(mensagens, args.vault)
-                print("✓ Conversa gravada em historico/\n")
+                _salvar_historico(mensagens, vault_path)
+                ui.console.print("[success]Conversa gravada em historico/[/success]\n")
+                continue
+
+            if texto == "/historico":
+                ui.show_history_list(vault_path)
+                continue
+
+            if texto == "/limpar":
+                ui.clear()
+                continue
+
+            if texto == "/ajuda":
+                ui.console.print(Panel(
+                    "Comandos disponíveis:\n"
+                    "  /salvar       Grava checkpoint da conversa em historico/\n"
+                    "  /historico    Lista últimos registos em historico/\n"
+                    "  /vault        Mostra vault atual\n"
+                    "  /vault <path> Troca vault (reinicializa)\n"
+                    "  /modelo <id>  Troca modelo NVIDIA\n"
+                    "  /limpar       Limpa ecrã\n"
+                    "  /config       Mostra configuração\n"
+                    "  /config theme dark|light|auto  Altera tema\n"
+                    "  /ajuda        Mostra esta ajuda\n"
+                    "  sair / exit / quit   Termina a conversa",
+                    title="Ajuda", border_style="info"))
                 continue
 
             if texto.startswith("/modelo "):
-                novo_modelo = texto.split(" ", 1)[1].strip()
+                novo = texto.split(" ", 1)[1].strip()
                 try:
-                    cliente = ClienteNVIDIA(modelo=novo_modelo)
-                    print(f"Modelo alterado para: {novo_modelo}\n")
+                    cliente = ClienteNVIDIA(modelo=novo)
+                    ui.console.print(f"[success]Modelo alterado para:[/success] [info]{novo}[/info]\n")
                 except ErroModeloNVIDIA as e:
-                    print(f"Erro ao trocar modelo: {e}\n")
+                    ui.print_error(f"Erro ao trocar modelo: {e}")
+                continue
+
+            if texto.startswith("/vault"):
+                parts = texto.split()
+                if len(parts) == 1:
+                    ui.console.print(f"[info]Vault atual:[/info] {vault_path}")
+                else:
+                    novo_vault = parts[1]
+                    ui.console.print(f"[info]A trocar vault para {novo_vault}...[/info]")
+                    # reinicia loop com novo vault (simples: reinicia processo)
+                    ui.console.print("[warning]Reinicie o programa com --vault <path>[/warning]")
+                continue
+
+            if texto.startswith("/config"):
+                parts = texto.split()
+                if len(parts) == 1:
+                    ui.show_config()
+                elif parts[1] == "theme" and len(parts) == 3:
+                    ui.set_config("theme", parts[2])
+                else:
+                    ui.console.print("[warning]Uso:[/warning] /config  |  /config theme dark|light|auto")
                 continue
 
             if texto.lower() in {"/ajuda", "/help"}:
-                print("Comandos disponíveis:")
-                print("  /modelo <nome>   Troca o modelo (ex.: /modelo nvidia/nemotron-3-ultra)")
-                print("  /salvar          Grava checkpoint da conversa em historico/")
-                print("  /ajuda           Mostra esta ajuda")
-                print("  sair / exit / quit   Termina a conversa\n")
+                ui.console.print(Panel(
+                    "Comandos disponíveis:\n"
+                    "  /salvar       Grava checkpoint da conversa em historico/\n"
+                    "  /historico    Lista últimos registos em historico/\n"
+                    "  /vault        Mostra vault atual\n"
+                    "  /vault <path> Troca vault (reinicializa)\n"
+                    "  /modelo <id>  Troca modelo NVIDIA\n"
+                    "  /limpar       Limpa ecrã\n"
+                    "  /config       Mostra configuração\n"
+                    "  /config theme dark|light|auto  Altera tema\n"
+                    "  /ajuda        Mostra esta ajuda\n"
+                    "  sair / exit / quit   Termina a conversa",
+                    title="Ajuda", border_style="info"))
                 continue
 
+            # mensagem normal do utilizador
             mensagens.append({"role": "user", "content": texto})
             try:
-                resposta = executar_ciclo_ferramentas(cliente, vault, mensagens)
+                with ui.thinking():
+                    resposta = executar_ciclo_ferramentas(cliente, vault, mensagens)
             except ErroModeloNVIDIA as e:
-                print(f"Erro: {e}\n")
-                mensagens.pop()  # não guardar a pergunta se a chamada falhou
+                ui.print_error(str(e))
+                mensagens.pop()
                 continue
-            print(f"Mnemo: {resposta}\n")
+            ui.print_response(resposta)
 
 
 if __name__ == "__main__":
