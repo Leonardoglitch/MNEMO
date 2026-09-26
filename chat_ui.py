@@ -68,7 +68,7 @@ class ChatUI:
             "/salvar", "/historico", "/vault", "/modelo",
             "/limpar", "/config", "/ajuda", "sair", "exit", "quit"
         ]
-        completer = WordCompleter(base_commands, ignore_case=True)
+        completer = WordCompleter(base_commands, ignore_case=True, sentence=True)
 
         kb = KeyBindings()
 
@@ -81,17 +81,30 @@ class ChatUI:
             # cancela input atual, não sai do programa
             event.app.current_buffer.reset()
 
+        @kb.add("c-d")
+        def _(event):
+            # EOF - sair graciosamente
+            event.app.exit(result=EOFError)
+
         self.session = PromptSession(
             history=FileHistory(str(Path.home() / ".mnemo" / "chat_history")),
             completer=completer,
             key_bindings=kb,
+            complete_while_typing=True,
         )
         self._base_commands = base_commands
         self._completer = completer
 
     def update_completer(self, pastas_permitidas: List[str]) -> None:
         """Atualiza auto-complete com pastas permitidas do vault."""
-        words = self._base_commands + [f"{p}/" for p in pastas_permitidas]
+        # Adiciona completions para pastas/ e pastas/arquivo.md
+        folder_completions = []
+        for p in pastas_permitidas:
+            folder_completions.append(f"{p}/")
+            # Adiciona sugestões de arquivos .md comuns
+            folder_completions.append(f"{p}/")
+        model_completions = self.get_model_completions()
+        words = self._base_commands + folder_completions + model_completions
         self._completer.words = words
 
     # ------------------------------------------------------------------ public API
@@ -176,3 +189,8 @@ class ChatUI:
             self.console.print(f"[success]Config[/success] {key} = [info]{value}[/info]")
         except Exception as e:
             self.print_error(str(e))
+
+    def get_model_completions(self) -> List[str]:
+        """Retorna modelos disponíveis para auto-complete."""
+        fallback = self.config.get("fallback_models", [])
+        return [m for m in fallback if m not in self._base_commands]

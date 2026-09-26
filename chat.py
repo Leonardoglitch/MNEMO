@@ -250,22 +250,45 @@ def main() -> None:
                     ui.show_config()
                 elif parts[1] == "theme" and len(parts) == 3:
                     ui.set_config("theme", parts[2])
+                elif parts[1] == "model" and len(parts) == 3:
+                    ui.set_config("model_default", parts[2])
+                    ui.console.print("[info]Modelo padrão alterado. Reiniciará na próxima sessão.[/info]")
+                elif parts[1] == "vault" and len(parts) == 3:
+                    ui.set_config("vault_default", parts[2])
+                    ui.console.print("[info]Vault padrão alterado. Reiniciará na próxima sessão.[/info]")
+                elif parts[1] == "timeout" and len(parts) == 3:
+                    try:
+                        ui.set_config("timeout", int(parts[2]))
+                    except ValueError:
+                        ui.print_error("Timeout deve ser um número inteiro (segundos)")
+                elif parts[1] == "fallback" and len(parts) >= 3:
+                    models = [m.strip() for m in " ".join(parts[2:]).split(",")]
+                    ui.set_config("fallback_models", models)
+                elif parts[1] == "reset":
+                    ui.config.data = ui.config.data.__class__.DEFAULTS.copy() if hasattr(ui.config.data, '__class__') else ui.config.data
+                    ui.config.save()
+                    ui.console.print("[success]Config resetado para padrões.[/success]")
                 else:
-                    ui.console.print("[warning]Uso:[/warning] /config  |  /config theme dark|light|auto")
+                    ui.console.print("[warning]Uso:[/warning] /config  |  /config theme dark|light|auto  |  /config model <id>  |  /config vault <path>  |  /config timeout <seg>  |  /config fallback <model1,model2,...>  |  /config reset")
                 continue
 
             if texto.lower() in {"/ajuda", "/help"}:
                 ui.console.print(Panel(
                     "Comandos disponíveis:\n"
-                    "  /salvar       Grava checkpoint da conversa em historico/\n"
-                    "  /historico    Lista últimos registos em historico/\n"
-                    "  /vault        Mostra vault atual\n"
-                    "  /vault <path> Troca vault (reinicializa)\n"
-                    "  /modelo <id>  Troca modelo NVIDIA\n"
-                    "  /limpar       Limpa ecrã\n"
-                    "  /config       Mostra configuração\n"
-                    "  /config theme dark|light|auto  Altera tema\n"
-                    "  /ajuda        Mostra esta ajuda\n"
+                    "  /salvar         Grava checkpoint da conversa em historico/\n"
+                    "  /historico      Lista últimos registos em historico/\n"
+                    "  /vault          Mostra vault atual\n"
+                    "  /vault <path>   Troca vault (reinicia necessário)\n"
+                    "  /modelo <id>    Troca modelo NVIDIA\n"
+                    "  /limpar         Limpa ecrã\n"
+                    "  /config         Mostra configuração\n"
+                    "  /config theme dark|light|auto   Altera tema\n"
+                    "  /config model <id>              Define modelo padrão\n"
+                    "  /config vault <path>            Define vault padrão\n"
+                    "  /config timeout <seg>           Define timeout API\n"
+                    "  /config fallback <m1,m2,...>    Define modelos fallback\n"
+                    "  /config reset                   Reseta configuração\n"
+                    "  /ajuda           Mostra esta ajuda\n"
                     "  sair / exit / quit   Termina a conversa",
                     title="Ajuda", border_style="info"))
                 continue
