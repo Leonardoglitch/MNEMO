@@ -12,10 +12,12 @@ resposta em texto.
 """
 
 import argparse
+import ast
 import json
 import os
 import sys
-from typing import List, Dict, Any
+import time
+from typing import List, Dict, Any, Union, Generator
 
 from mnemo import FerramentasVault
 from mnemo.modelo_nvidia import ClienteNVIDIA, ErroModeloNVIDIA
@@ -23,7 +25,7 @@ from mnemo.modelo_nvidia import ClienteNVIDIA, ErroModeloNVIDIA
 from config import Config
 from chat_ui import ChatUI
 
-MAX_CICLOS_FERRAMENTAS = 8  # trava de segurança contra um ciclo sem fim
+MAX_CICLOS_FERRAMENTAS = 15  # trava de segurança contra um ciclo sem fim (aumentado de 8 para 15)
 
 INSTRUCAO_SISTEMA = (
     "És o assistente do Mnemo, uma plataforma pessoal de IA. Tens acesso a um "
@@ -80,12 +82,28 @@ def executar_ciclo_ferramentas(
 
         for pedido in pedidos:
             nome = pedido["function"]["name"]
+            args_str = pedido["function"]["arguments"] or "{}"
             try:
-                argumentos = json.loads(pedido["function"]["arguments"] or "{}")
+                argumentos = json.loads(args_str)
             except json.JSONDecodeError:
-                resultado = {"ok": False, "erro": "Argumentos da ferramenta não são JSON válido."}
-            else:
+                # Tenta corrigir JSON comum (aspas simples, trailing commas, etc.)
+                try:
+                    import ast
+                    argumentos = ast.literal_eval(args_str)
+                except Exception:
+                    resultado = {"ok": False, "erro": f"Argumentos da ferramenta não são JSON válido: {args_str[:100]}"}
+                    mensagens.append(
+                        {
+                            "role": "tool",
+                            "tool_call_id": pedido["id"],
+                            "content": json.dumps(resultado, ensure_ascii=False),
+                        }
+                    )
+                    continue
+            try:
                 resultado = vault.executar(nome, argumentos)
+            except Exception as e:
+                resultado = {"ok": False, "erro": f"Erro ao executar ferramenta: {e}"}
             mensagens.append(
                 {
                     "role": "tool",
@@ -172,12 +190,18 @@ def main() -> None:
         ui.config = ui.config  # no-op, garante instância
         ui.update_completer([p.rstrip("/") for p in pastas])
 
-        # Health check rápido
-        try:
-            if not cliente.health_check():
-                ui.print_error("Health check falhou — API indisponível.")
-                sys.exit(1)
-        except Exception:
+        # Health check rápido com retry
+        health_ok = False
+        for _ in range(3):
+            try:
+                if cliente.health_check():
+                    health_ok = True
+                    break
+            except Exception:
+                pass
+            time.sleep(1)
+        
+        if not health_ok:
             ui.print_error("Health check falhou — API indisponível.")
             sys.exit(1)
 
@@ -310,6 +334,11 @@ def main() -> None:
                         full_text = ui.print_streaming(resposta_gen)
                         # Criar mensagem de resposta final para o histórico
                         resposta_final = {"role": "assistant", "content": full_text}
+                    elif isinstance(resposta_gen, str):
+                        # É uma string de erro/limite - não adicionar ao histórico
+                        ui.print_error(resposta_gen)
+                        mensagens.pop()  # remove a mensagem do utilizador
+                        continue
                     else:
                         # Resposta não-streaming (fallback ou erro)
                         resposta_final = resposta_gen
