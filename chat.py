@@ -24,6 +24,7 @@ from mnemo.modelo_nvidia import ClienteNVIDIA, ErroModeloNVIDIA
 
 from config import Config
 from chat_ui import ChatUI
+from rich.panel import Panel
 
 MAX_CICLOS_FERRAMENTAS = 15  # trava de segurança contra um ciclo sem fim (aumentado de 8 para 15)
 
@@ -295,7 +296,7 @@ def main() -> None:
                     models = [m.strip() for m in " ".join(parts[2:]).split(",")]
                     ui.set_config("fallback_models", models)
                 elif parts[1] == "reset":
-                    ui.config.data = ui.config.data.__class__.DEFAULTS.copy() if hasattr(ui.config.data, '__class__') else ui.config.data
+                    ui.config.data = {**Config.DEFAULTS}
                     ui.config.save()
                     ui.console.print("[success]Config resetado para padrões.[/success]")
                 else:
