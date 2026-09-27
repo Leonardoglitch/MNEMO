@@ -172,3 +172,37 @@ def test_create_note_caminho_com_espacos_rejeitado(vault):
     assert res["ok"] is False
     # O armazenamento rejeita por causa do ValueError do .md check (tem espaço antes de .md)
     # ou pela validação de caminho
+
+
+def test_list_files_todos(vault):
+    res = vault.executar("list_files", {})
+    assert res["ok"] is True
+    caminhos = [n["caminho"] for n in res["notas"]]
+    # deve conter as notas iniciais das pastas permitidas
+    assert "projetos/orcamento.md" in caminhos
+    assert "projetos/tarefas.md" in caminhos
+    assert "estudo/sqlite.md" in caminhos
+    # pessoal não deve aparecer
+    assert "pessoal/orcamento-pessoal.md" not in caminhos
+
+
+def test_list_files_filtro_pasta(vault):
+    res = vault.executar("list_files", {"pasta": "projetos"})
+    assert res["ok"] is True
+    caminhos = [n["caminho"] for n in res["notas"]]
+    assert "projetos/orcamento.md" in caminhos
+    assert "projetos/tarefas.md" in caminhos
+    assert "estudo/sqlite.md" not in caminhos
+
+
+def test_list_files_pasta_inexistente(vault):
+    res = vault.executar("list_files", {"pasta": "inexistente"})
+    assert res["ok"] is True
+    assert res["notas"] == []
+
+
+def test_list_files_pasta_pessoal_bloqueada(vault):
+    # pessoal não está nas pastas permitidas, deve retornar lista vazia
+    res = vault.executar("list_files", {"pasta": "pessoal"})
+    assert res["ok"] is True
+    assert res["notas"] == []

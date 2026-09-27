@@ -22,7 +22,7 @@ from typing import List, Dict, Any, Union, Generator
 from mnemo import FerramentasVault
 from mnemo.modelo_nvidia import ClienteNVIDIA, ErroModeloNVIDIA
 
-from config import Config
+from config import Config, DEFAULTS
 from chat_ui import ChatUI
 from rich.panel import Panel
 
@@ -298,7 +298,7 @@ def main() -> None:
                     models = [m.strip() for m in " ".join(parts[2:]).split(",")]
                     ui.set_config("fallback_models", models)
                 elif parts[1] == "reset":
-                    ui.config.data = {**Config.DEFAULTS}
+                    ui.config.data = {**DEFAULTS}
                     ui.config.save()
                     ui.console.print("[success]Config resetado para padrões.[/success]")
                 else:
