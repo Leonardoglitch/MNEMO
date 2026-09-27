@@ -13,14 +13,13 @@ CONFIG_FILE = CONFIG_DIR / "config.json"
 DEFAULTS: Dict[str, Any] = {
     "theme": "auto",                     # "auto" | "dark" | "light"
     "vault_default": "vault-teste",
-    "model_default": "nvidia/nemotron-3-super-120b-a12b",
+    "model_default": "nvidia/nemotron-3.5-lightning-30b-a3b",
     "timeout": 60,                       # seconds
     "auto_save": True,
     "max_history": 1000,
     "fallback_models": [
         "nvidia/nemotron-3-super-120b-a12b",
         "nvidia/nemotron-3-ultra",
-        "nvidia/nemotron-4-340b-instruct",
     ],
     "health_check_timeout": 5,
 }

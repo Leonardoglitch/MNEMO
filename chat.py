@@ -171,15 +171,17 @@ def main() -> None:
         config.save()
 
     vault_path = config.get("vault_default", "vault-teste")
-    model_id = config.get("model_default")
 
     # UI
     config.set("theme", config.get("theme", "auto"))  # garante theme
     ui = ChatUI(config)
 
     # Health check rápido
+    # Só passa modelo se foi explicitamente fornecido via --modelo; caso contrário,
+    # ClienteNVIDIA lê NVIDIA_MODEL do .env (que usa o default do config se não definido)
+    modelo_cli = args.modelo
     try:
-        cliente = ClienteNVIDIA(modelo=model_id) if model_id else ClienteNVIDIA()
+        cliente = ClienteNVIDIA(modelo=modelo_cli) if modelo_cli else ClienteNVIDIA()
     except ErroModeloNVIDIA as e:
         print(f"Erro ao inicializar modelo: {e}", file=sys.stderr)
         sys.exit(1)
@@ -207,7 +209,7 @@ def main() -> None:
             sys.exit(1)
 
         mensagens = [{"role": "system", "content": INSTRUCAO_SISTEMA}]
-        ui.welcome(vault.armazenamento.perms.raiz.name, model_id or "default")
+        ui.welcome(vault.armazenamento.perms.raiz.name, cliente.modelo)
 
         while True:
             try:

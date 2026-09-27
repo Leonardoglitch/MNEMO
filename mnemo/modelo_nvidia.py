@@ -15,7 +15,7 @@ import urllib.request
 from typing import Any, Dict, Generator, List, Optional, Union
 
 URL_BASE = "https://integrate.api.nvidia.com/v1/chat/completions"
-MODELO_PADRAO = "nvidia/nemotron-3-super-120b-a12b"
+MODELO_PADRAO = "nvidia/nemotron-3.5-lightning-30b-a3b"
 
 
 class ErroModeloNVIDIA(Exception):
@@ -61,7 +61,6 @@ class ClienteNVIDIA:
         self.fallback_models = fallback_models if fallback_models is not None else [
             "nvidia/nemotron-3-super-120b-a12b",
             "nvidia/nemotron-3-ultra",
-            "nvidia/nemotron-4-340b-instruct",
         ]
         self.max_retries = max_retries
         self.base_delay = base_delay
@@ -147,7 +146,7 @@ class ClienteNVIDIA:
                         "model": modelo,
                         "messages": mensagens,
                         "max_tokens": max_tokens,
-                        "temperature": 0.7,
+                        "temperature": temperatura,
                         "chat_template_kwargs": {"enable_thinking": False},
                     }
                     if ferramentas and not stream:
