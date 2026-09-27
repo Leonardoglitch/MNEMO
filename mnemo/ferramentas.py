@@ -1,6 +1,6 @@
 """Ferramentas do agente para interagir com o Vault (Fase 1).
 
-Expõe quatro operações seguras: search, read_note, create_note, append_to_note.
+Expõe cinco operações seguras: search, read_note, create_note, append_to_note, list_files.
 Todas respeitam as permissões configuradas no .vault/config.json.
 """
 
@@ -59,6 +59,17 @@ class FerramentasVault:
                 "required": ["caminho", "texto"],
             },
         },
+        {
+            "name": "list_files",
+            "description": "Lista as notas existentes numa pasta (ou em todas as pastas permitidas, se a pasta não for indicada).",
+            "input_schema": {
+                "type": "object",
+                "properties": {
+                    "pasta": {"type": "string", "description": "Pasta a listar (ex.: 'projetos'). Omite para listar tudo."}
+                },
+                "required": [],
+            },
+        },
     ]
 
     def __init__(self, raiz_vault: str):
@@ -85,6 +96,8 @@ class FerramentasVault:
                 return self._create_note(argumentos)
             if nome == "append_to_note":
                 return self._append_to_note(argumentos)
+            if nome == "list_files":
+                return self._list_files(argumentos)
             return {"ok": False, "erro": f"Ferramenta desconhecida: {nome}"}
         except PermissaoNegada as e:
             return {"ok": False, "erro": str(e)}
@@ -175,3 +188,11 @@ class FerramentasVault:
         texto = args.get("texto", "")
         self.armazenamento.acrescentar(caminho, texto)
         return {"ok": True, "caminho": caminho}
+
+    def _list_files(self, args: Dict[str, Any]) -> Dict[str, Any]:
+        pasta = args.get("pasta")
+        linhas = self.indexador.con.execute("SELECT caminho, titulo FROM notas ORDER BY caminho").fetchall()
+        if pasta:
+            pasta = pasta.strip("/")
+            linhas = [(c, t) for c, t in linhas if c == pasta or c.startswith(pasta + "/")]
+        return {"ok": True, "notas": [{"caminho": c, "titulo": t} for c, t in linhas]}
