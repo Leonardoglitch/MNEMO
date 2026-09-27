@@ -4,6 +4,7 @@ NVIDIA de verdade, por isso corre em qualquer máquina, sem chave de API real.
 
 import io
 import json
+import time
 
 import pytest
 
@@ -113,6 +114,8 @@ def test_erro_de_rede_e_transformado_em_erro_proprio(monkeypatch):
         raise mod.urllib.error.URLError("sem ligação")
 
     monkeypatch.setattr(mod.urllib.request, "urlopen", urlopen_falha)
+    # Mock time.sleep to avoid real delays in retry logic
+    monkeypatch.setattr(time, "sleep", lambda x: None)
     with pytest.raises(ErroModeloNVIDIA):
         ClienteNVIDIA().conversar([{"role": "user", "content": "oi"}])
 
