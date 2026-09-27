@@ -17,7 +17,7 @@ import json
 import os
 import sys
 import time
-from typing import List, Dict, Any, Union, Generator
+from typing import List, Dict, Any
 
 from mnemo import FerramentasVault
 from mnemo.modelo_nvidia import ClienteNVIDIA, ErroModeloNVIDIA
@@ -40,6 +40,7 @@ INSTRUCAO_SISTEMA = (
     "- O nome do ficheiro deve terminar em .md\n"
     "- Exemplo correto: projetos/meu-plano.md\n"
     "- Se o utilizador der só um nome (ex.: 'plano'), pergunta em que pasta ou sugere projetos/\n\n"
+    "Para listar ou nomear todas as notas, usa `list_files`; usa `search` só quando tiveres palavras-chave concretas.\n\n"
     "Comandos especiais:\n"
     "- `/salvar` — grava checkpoint da conversa em historico/\n"
     "- `/historico` — lista últimos registos\n"
@@ -66,8 +67,8 @@ def carregar_env(caminho: str = ".env") -> None:
 
 
 def executar_ciclo_ferramentas(
-    cliente: ClienteNVIDIA, vault: FerramentasVault, mensagens: List[Dict[str, Any]], stream: bool = False
-) -> Union[str, Generator]:
+    cliente: ClienteNVIDIA, vault: FerramentasVault, mensagens: List[Dict[str, Any]]
+) -> str:
     """Envia mensagens ao modelo e executa as ferramentas que ele pedir."""
     for _ in range(MAX_CICLOS_FERRAMENTAS):
         # Para chamadas de ferramentas, não usar streaming (precisamos do JSON completo)
@@ -76,9 +77,7 @@ def executar_ciclo_ferramentas(
 
         pedidos = resposta.get("tool_calls")
         if not pedidos:
-            # Resposta final sem tool calls - pode usar streaming se solicitado
-            if stream:
-                return cliente.conversar(mensagens, ferramentas=None, stream=True)
+            # Resposta final sem tool calls
             return resposta.get("content") or ""
 
         for pedido in pedidos:
@@ -330,23 +329,13 @@ def main() -> None:
             mensagens.append({"role": "user", "content": texto})
             try:
                 with ui.thinking():
-                    # Tentar com streaming primeiro
-                    resposta_gen = executar_ciclo_ferramentas(cliente, vault, mensagens, stream=True)
-                    if hasattr(resposta_gen, '__iter__') and not isinstance(resposta_gen, (str, dict)):
-                        # É um generator de streaming
-                        full_text = ui.print_streaming(resposta_gen)
-                        # Criar mensagem de resposta final para o histórico
-                        resposta_final = {"role": "assistant", "content": full_text}
-                    elif isinstance(resposta_gen, str):
-                        # É uma string de erro/limite - não adicionar ao histórico
-                        ui.print_error(resposta_gen)
-                        mensagens.pop()  # remove a mensagem do utilizador
-                        continue
-                    else:
-                        # Resposta não-streaming (fallback ou erro)
-                        resposta_final = resposta_gen
-                        ui.print_response(resposta_final.get("content", "") if isinstance(resposta_final, dict) else str(resposta_final))
-                    mensagens.append(resposta_final)
+                    resposta_texto = executar_ciclo_ferramentas(cliente, vault, mensagens)
+                if resposta_texto.startswith("(demasiados pedidos"):
+                    ui.print_error(resposta_texto)
+                    mensagens.pop()
+                    continue
+                ui.print_response(resposta_texto)
+                mensagens.append({"role": "assistant", "content": resposta_texto})
             except ErroModeloNVIDIA as e:
                 ui.print_error(str(e))
                 mensagens.pop()
