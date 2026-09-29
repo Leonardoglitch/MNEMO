@@ -211,3 +211,106 @@ class ChatUI:
         """Retorna modelos disponíveis para auto-complete."""
         fallback = self.config.get("fallback_models", [])
         return [m for m in fallback if m not in self._base_commands]
+
+    # ------------------------------------------------------------------ histórico
+    def search_history(self, vault_root: str, termo: str) -> None:
+        """Busca termo no histórico e mostra resultados com preview."""
+        hist_dir = Path(vault_root) / "notas" / "historico"
+        if not hist_dir.exists():
+            self.console.print("[muted]Nenhum histórico ainda.[/muted]")
+            return
+        files = sorted(hist_dir.glob("*.md"), reverse=True)
+        if not files:
+            self.console.print("[muted]Nenhum histórico ainda.[/muted]")
+            return
+
+        termo_lower = termo.lower()
+        resultados = []
+        for f in files:
+            try:
+                txt = f.read_text(encoding="utf-8")
+                if termo_lower in txt.lower():
+                    # Encontra linha com o termo para preview
+                    linhas = txt.split("\n")
+                    for i, linha in enumerate(linhas):
+                        if termo_lower in linha.lower():
+                            preview = " ".join(linhas[max(0, i-1):i+2]).strip()
+                            if len(preview) > 150:
+                                preview = preview[:147] + "..."
+                            resultados.append((f.name, preview))
+                            break
+            except Exception:
+                continue
+
+        if not resultados:
+            self.console.print(f"[muted]Nenhum resultado para '[info]{termo}[/info]'.[/muted]")
+            return
+
+        lines = [f"  [info]{nome}[/info] — {preview}" for nome, preview in resultados[:20]]
+        self.console.print(f"\n[success]{len(resultados)} resultado(s) para '[info]{termo}[/info]':[/success]\n")
+        self.console.print("\n".join(lines))
+
+    def load_history_session(self, vault_root: str, session_id: str) -> List[Dict[str, Any]]:
+        """
+        Carrega uma sessão do histórico e retorna lista de mensagens.
+        session_id pode ser o nome do arquivo (ex: 2026-09-27_11-11.md) ou prefixo.
+        """
+        hist_dir = Path(vault_root) / "notas" / "historico"
+        if not hist_dir.exists():
+            self.print_error("Diretório de histórico não existe.")
+            return []
+
+        # Encontra arquivo
+        if not session_id.endswith(".md"):
+            session_id += ".md"
+        matches = list(hist_dir.glob(f"*{session_id}*"))
+        if not matches:
+            self.print_error(f"Sessão '{session_id}' não encontrada.")
+            return []
+        if len(matches) > 1:
+            self.print_error(f"Múltiplas sessões correspondem a '{session_id}':")
+            for m in matches:
+                self.console.print(f"  [info]{m.name}[/info]")
+            return []
+
+        arquivo = matches[0]
+        try:
+            txt = arquivo.read_text(encoding="utf-8")
+        except Exception as e:
+            self.print_error(f"Erro ao ler arquivo: {e}")
+            return []
+
+        # Parse do formato markdown do histórico
+        mensagens = []
+        current_role = None
+        current_content = []
+
+        for line in txt.split("\n"):
+            if line.startswith("## "):
+                # Nova mensagem
+                if current_role and current_content:
+                    mensagens.append({"role": current_role, "content": "\n".join(current_content).strip()})
+                role_str = line[3:].strip()
+                # Detecta role pelos emojis/labels usados no _salvar_historico
+                if "🧑" in role_str or "Tu" in role_str or "user" in role_str.lower() or "utilizador" in role_str.lower():
+                    current_role = "user"
+                elif "🤖" in role_str or "Mnemo" in role_str or "assistant" in role_str.lower():
+                    current_role = "assistant"
+                elif "tool" in role_str.lower():
+                    current_role = "tool"
+                else:
+                    current_role = "user"
+                current_content = []
+            elif line.startswith("---"):
+                continue
+            else:
+                current_content.append(line)
+
+        if current_role and current_content:
+            mensagens.append({"role": current_role, "content": "\n".join(current_content).strip()})
+
+        # Filtra mensagens de sistema (não devem ser recarregadas)
+        mensagens = [m for m in mensagens if m["role"] != "system"]
+
+        self.console.print(f"[success]Sessão carregada:[/success] [info]{arquivo.name}[/info] ({len(mensagens)} mensagens)")
+        return mensagens

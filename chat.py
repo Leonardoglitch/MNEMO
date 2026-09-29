@@ -232,8 +232,20 @@ def main() -> None:
                 ui.console.print("[success]Conversa gravada em historico/[/success]\n")
                 continue
 
-            if texto == "/historico":
-                ui.show_history_list(vault_path)
+            if texto.startswith("/historico"):
+                parts = texto.split(maxsplit=2)
+                if len(parts) == 1:
+                    ui.show_history_list(vault_path)
+                elif parts[1] == "search" and len(parts) == 3:
+                    ui.search_history(vault_path, parts[2])
+                elif parts[1] == "load" and len(parts) == 3:
+                    loaded = ui.load_history_session(vault_path, parts[2])
+                    if loaded:
+                        # Substitui mensagens (mantém system prompt)
+                        mensagens = [{"role": "system", "content": INSTRUCAO_SISTEMA}] + loaded
+                        ui.console.print("[success]Sessão carregada — pode continuar a conversa.[/success]\n")
+                else:
+                    ui.console.print("[warning]Uso:[/warning] /historico  |  /historico search <termo>  |  /historico load <id>")
                 continue
 
             if texto == "/limpar":
@@ -243,16 +255,18 @@ def main() -> None:
             if texto == "/ajuda":
                 ui.console.print(Panel(
                     "Comandos disponíveis:\n"
-                    "  /salvar       Grava checkpoint da conversa em historico/\n"
-                    "  /historico    Lista últimos registos em historico/\n"
-                    "  /vault        Mostra vault atual\n"
-                    "  /vault <path> Troca vault (reinicializa)\n"
-                    "  /modelo <id>  Troca modelo NVIDIA\n"
-                    "  /limpar       Limpa ecrã\n"
-                    "  /config       Mostra configuração\n"
+                    "  /salvar                 Grava checkpoint da conversa em historico/\n"
+                    "  /historico              Lista últimos registos em historico/\n"
+                    "  /historico search <termo> Busca termo no histórico\n"
+                    "  /historico load <id>    Carrega sessão anterior (continua conversa)\n"
+                    "  /vault                  Mostra vault atual\n"
+                    "  /vault <path>           Troca vault (reinicializa)\n"
+                    "  /modelo <id>            Troca modelo NVIDIA\n"
+                    "  /limpar                 Limpa ecrã\n"
+                    "  /config                 Mostra configuração\n"
                     "  /config theme dark|light|auto  Altera tema\n"
-                    "  /ajuda        Mostra esta ajuda\n"
-                    "  sair / exit / quit   Termina a conversa",
+                    "  /ajuda                  Mostra esta ajuda\n"
+                    "  sair / exit / quit      Termina a conversa",
                     title="Ajuda", border_style="info"))
                 continue
 
