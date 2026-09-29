@@ -6,7 +6,7 @@ import json
 from contextlib import contextmanager
 from datetime import datetime
 from pathlib import Path
-from typing import List, Dict, Any, Generator
+from typing import List, Dict, Any, Generator, Optional
 
 from rich.console import Console
 from rich.live import Live
@@ -18,6 +18,10 @@ from prompt_toolkit import PromptSession
 from prompt_toolkit.history import FileHistory
 from prompt_toolkit.completion import WordCompleter
 from prompt_toolkit.key_binding import KeyBindings
+from prompt_toolkit.application import Application
+from prompt_toolkit.layout import Layout, Window
+from prompt_toolkit.layout.controls import FormattedTextControl
+from prompt_toolkit.styles import Style
 
 from config import Config
 
@@ -314,3 +318,94 @@ class ChatUI:
 
         self.console.print(f"[success]Sessão carregada:[/success] [info]{arquivo.name}[/info] ({len(mensagens)} mensagens)")
         return mensagens
+
+    # ------------------------------------------------------------------ histórico interativo (TUI)
+    def show_history_interactive(self, vault_root: str) -> Optional[str]:
+        """
+        Abre TUI interativa para navegar no histórico.
+        Retorna o nome do arquivo selecionado ou None se cancelado.
+        """
+        hist_dir = Path(vault_root) / "notas" / "historico"
+        if not hist_dir.exists():
+            self.console.print("[muted]Nenhum histórico ainda.[/muted]")
+            return None
+
+        files = sorted(hist_dir.glob("*.md"), reverse=True)
+        if not files:
+            self.console.print("[muted]Nenhum histórico ainda.[/muted]")
+            return None
+
+        # Prepara dados para a lista
+        items = []
+        for f in files:
+            try:
+                txt = f.read_text(encoding="utf-8")
+                preview = txt.split("\n")[1:4]
+                preview = " ".join(p.strip() for p in preview if p.strip())
+                if len(preview) > 100:
+                    preview = preview[:97] + "..."
+            except Exception:
+                preview = "(erro ao ler)"
+            items.append((f.name, preview))
+
+        selected_index = [0]  # mutable para closure
+        result = [None]  # para capturar resultado
+
+        def get_formatted_text():
+            """Gera texto formatado para a lista."""
+            result_text = []
+            for i, (nome, preview) in enumerate(items):
+                if i == selected_index[0]:
+                    result_text.append(("reverse", f"▶ {nome} — {preview}\n"))
+                else:
+                    result_text.append(("", f"  {nome} — {preview}\n"))
+            return result_text
+
+        control = FormattedTextControl(get_formatted_text, focusable=True)
+
+        kb = KeyBindings()
+
+        @kb.add("up")
+        def _(event):
+            if selected_index[0] > 0:
+                selected_index[0] -= 1
+
+        @kb.add("down")
+        def _(event):
+            if selected_index[0] < len(items) - 1:
+                selected_index[0] += 1
+
+        @kb.add("enter")
+        def _(event):
+            result[0] = items[selected_index[0]][0]
+            event.app.exit()
+
+        @kb.add("c-c")
+        @kb.add("q")
+        @kb.add("escape")
+        def _(event):
+            result[0] = None
+            event.app.exit()
+
+        # Style para a lista
+        style = Style.from_dict({
+            "reverse": "bg:#0055aa #ffffff bold",
+        })
+
+        layout = Layout(Window(control, wrap_lines=False, style="class:list"))
+
+        app = Application(
+            layout=layout,
+            key_bindings=kb,
+            style=style,
+            full_screen=False,
+            mouse_support=False,
+        )
+
+        # Executa a aplicação
+        try:
+            app.run()
+        except EOFError:
+            pass
+
+        return result[0]

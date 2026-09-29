@@ -235,13 +235,18 @@ def main() -> None:
             if texto.startswith("/historico"):
                 parts = texto.split(maxsplit=2)
                 if len(parts) == 1:
-                    ui.show_history_list(vault_path)
+                    # Modo interativo (TUI)
+                    selected = ui.show_history_interactive(vault_path)
+                    if selected:
+                        loaded = ui.load_history_session(vault_path, selected)
+                        if loaded:
+                            mensagens = [{"role": "system", "content": INSTRUCAO_SISTEMA}] + loaded
+                            ui.console.print("[success]Sessão carregada — pode continuar a conversa.[/success]\n")
                 elif parts[1] == "search" and len(parts) == 3:
                     ui.search_history(vault_path, parts[2])
                 elif parts[1] == "load" and len(parts) == 3:
                     loaded = ui.load_history_session(vault_path, parts[2])
                     if loaded:
-                        # Substitui mensagens (mantém system prompt)
                         mensagens = [{"role": "system", "content": INSTRUCAO_SISTEMA}] + loaded
                         ui.console.print("[success]Sessão carregada — pode continuar a conversa.[/success]\n")
                 else:
@@ -256,7 +261,7 @@ def main() -> None:
                 ui.console.print(Panel(
                     "Comandos disponíveis:\n"
                     "  /salvar                 Grava checkpoint da conversa em historico/\n"
-                    "  /historico              Lista últimos registos em historico/\n"
+                    "  /historico              Abre navegador interativo (setas ↑↓, Enter=carregar, q=sair)\n"
                     "  /historico search <termo> Busca termo no histórico\n"
                     "  /historico load <id>    Carrega sessão anterior (continua conversa)\n"
                     "  /vault                  Mostra vault atual\n"
