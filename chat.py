@@ -257,7 +257,7 @@ def main() -> None:
                     elif parts[i] == "--model" and i + 1 < len(parts):
                         model = parts[i + 1]
                         i += 2
-                    elif parts[i] in ("search", "load"):
+                    elif parts[i] in ("search", "load", "export", "import"):
                         subcommand = parts[i]
                         if i + 1 < len(parts):
                             subcommand_arg = parts[i + 1]
@@ -272,6 +272,10 @@ def main() -> None:
                     if loaded:
                         mensagens = [{"role": "system", "content": INSTRUCAO_SISTEMA}] + loaded
                         ui.console.print("[success]Sessão carregada — pode continuar a conversa.[/success]\n")
+                elif subcommand == "export" and subcommand_arg:
+                    ui.export_history(vault_path, subcommand_arg, since=since, until=until, model=model)
+                elif subcommand == "import" and subcommand_arg:
+                    ui.import_history(vault_path, subcommand_arg)
                 elif subcommand is None:
                     # Modo interativo (TUI) ou lista simples
                     if since or until or model:
@@ -286,7 +290,7 @@ def main() -> None:
                                 mensagens = [{"role": "system", "content": INSTRUCAO_SISTEMA}] + loaded
                                 ui.console.print("[success]Sessão carregada — pode continuar a conversa.[/success]\n")
                 else:
-                    ui.console.print("[warning]Uso:[/warning] /historico [--since YYYY-MM-DD] [--until YYYY-MM-DD] [--model <modelo]]  |  /historico search <termo>  |  /historico load <id>")
+                    ui.console.print("[warning]Uso:[/warning] /historico [--since YYYY-MM-DD] [--until YYYY-MM-DD] [--model <modelo]]  |  /historico search <termo>  |  /historico load <id>  |  /historico export <arquivo.json> [--since ...] [--until ...] [--model ...]  |  /historico import <arquivo.json>")
                 continue
 
             if texto == "/limpar":
@@ -301,6 +305,8 @@ def main() -> None:
                     "  /historico --since YYYY-MM-DD --until YYYY-MM-DD --model <modelo>  Lista filtrada\n"
                     "  /historico search <termo> Busca termo no histórico\n"
                     "  /historico load <id>    Carrega sessão anterior (continua conversa)\n"
+                    "  /historico export <arquivo.json> [--since ...] [--until ...] [--model ...]  Exporta para JSON\n"
+                    "  /historico import <arquivo.json>  Importa de JSON\n"
                     "  /vault                  Mostra vault atual\n"
                     "  /vault <path>           Troca vault (reinicializa)\n"
                     "  /modelo <id>            Troca modelo NVIDIA\n"

@@ -1,0 +1,9 @@
+# Conversa 2026-09-29_15-45
+
+**Modelo:** nvidia/nemotron-3-ultra
+
+## 🧑 Tu
+teste
+
+## 🤖 Mnemo
+resposta

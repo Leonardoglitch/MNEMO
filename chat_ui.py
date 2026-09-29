@@ -463,3 +463,150 @@ class ChatUI:
             pass
 
         return result[0]
+
+    # ------------------------------------------------------------------ histórico export/import
+    def export_history(self, vault_root: str, output_file: str, since: str = None, until: str = None, model: str = None) -> None:
+        """
+        Exporta histórico para JSON.
+        """
+        import json
+        from datetime import datetime
+        
+        hist_dir = Path(vault_root) / "notas" / "historico"
+        if not hist_dir.exists():
+            self.print_error("Diretório de histórico não existe.")
+            return
+
+        files = self._filter_history_files(hist_dir, since, until, model)
+        if not files:
+            self.console.print("[muted]Nenhum histórico com esses filtros.[/muted]")
+            return
+
+        export_data = {
+            "exported_at": datetime.now().isoformat(),
+            "vault_root": vault_root,
+            "filters": {"since": since, "until": until, "model": model},
+            "sessions": []
+        }
+
+        for f in files:
+            try:
+                txt = f.read_text(encoding="utf-8")
+                # Extrai modelo do cabeçalho se existir
+                modelo = ""
+                for line in txt.split("\n")[:5]:
+                    if line.startswith("**Modelo:**"):
+                        modelo = line.replace("**Modelo:**", "").strip()
+                        break
+                
+                # Parse mensagens
+                mensagens = []
+                current_role = None
+                current_content = []
+
+                for line in txt.split("\n"):
+                    if line.startswith("## "):
+                        if current_role and current_content:
+                            mensagens.append({"role": current_role, "content": "\n".join(current_content).strip()})
+                        role_str = line[3:].strip()
+                        if "🧑" in role_str or "Tu" in role_str or "user" in role_str.lower() or "utilizador" in role_str.lower():
+                            current_role = "user"
+                        elif "🤖" in role_str or "Mnemo" in role_str or "assistant" in role_str.lower():
+                            current_role = "assistant"
+                        elif "tool" in role_str.lower():
+                            current_role = "tool"
+                        else:
+                            current_role = "user"
+                        current_content = []
+                    elif line.startswith("---"):
+                        continue
+                    else:
+                        current_content.append(line)
+
+                if current_role and current_content:
+                    mensagens.append({"role": current_role, "content": "\n".join(current_content).strip()})
+
+                mensagens = [m for m in mensagens if m["role"] != "system"]
+
+                export_data["sessions"].append({
+                    "filename": f.name,
+                    "model": modelo,
+                    "messages": mensagens
+                })
+            except Exception as e:
+                self.print_error(f"Erro ao processar {f.name}: {e}")
+                continue
+
+        try:
+            output_path = Path(output_file)
+            output_path.parent.mkdir(parents=True, exist_ok=True)
+            output_path.write_text(json.dumps(export_data, ensure_ascii=False, indent=2), encoding="utf-8")
+            self.console.print(f"[success]Histórico exportado:[/success] [info]{output_file}[/info] ({len(export_data['sessions'])} sessões)")
+        except Exception as e:
+            self.print_error(f"Erro ao escrever arquivo: {e}")
+
+    def import_history(self, vault_root: str, input_file: str) -> int:
+        """
+        Importa histórico de JSON.
+        Retorna número de sessões importadas.
+        """
+        import json
+        
+        input_path = Path(input_file)
+        if not input_path.exists():
+            self.print_error(f"Arquivo não encontrado: {input_file}")
+            return 0
+
+        try:
+            data = json.loads(input_path.read_text(encoding="utf-8"))
+        except Exception as e:
+            self.print_error(f"Erro ao ler JSON: {e}")
+            return 0
+
+        if "sessions" not in data:
+            self.print_error("Formato inválido: chave 'sessions' não encontrada")
+            return 0
+
+        hist_dir = Path(vault_root) / "notas" / "historico"
+        hist_dir.mkdir(parents=True, exist_ok=True)
+
+        imported = 0
+        for session in data["sessions"]:
+            filename = session.get("filename", "")
+            if not filename:
+                continue
+            
+            # Verifica se já existe
+            target = hist_dir / filename
+            if target.exists():
+                self.console.print(f"[warning]Já existe:[/warning] {filename} (pulando)")
+                continue
+
+            # Reconstrói markdown
+            lines = [f"# Conversa {filename.replace('.md', '')}\n"]
+            if session.get("model"):
+                lines.append(f"**Modelo:** {session['model']}\n")
+            
+            for msg in session.get("messages", []):
+                role = msg.get("role", "user")
+                content = msg.get("content", "")
+                if role == "user":
+                    role_label = "🧑 Tu"
+                elif role == "assistant":
+                    role_label = "🤖 Mnemo"
+                elif role == "tool":
+                    role_label = "🔧 Tool"
+                else:
+                    role_label = "🧑 Tu"
+                
+                if content.strip():
+                    lines.append(f"## {role_label}\n{content}\n")
+
+            try:
+                target.write_text("\n".join(lines), encoding="utf-8")
+                imported += 1
+            except Exception as e:
+                self.print_error(f"Erro ao gravar {filename}: {e}")
+
+        self.console.print(f"[success]Importadas {imported} sessão(ões) para[/success] [info]{hist_dir}[/info]")
+        return imported
