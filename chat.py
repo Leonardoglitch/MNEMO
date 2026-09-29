@@ -114,7 +114,7 @@ def executar_ciclo_ferramentas(
     return "(demasiados pedidos de ferramentas seguidos — parei para não entrar em ciclo)"
 
 
-def _salvar_historico(mensagens: List[Dict[str, Any]], raiz_vault: str) -> None:
+def _salvar_historico(mensagens: List[Dict[str, Any]], raiz_vault: str, modelo: str = "") -> None:
     """Grava histórico completo (incl. tool calls) em historico/YYYY-MM-DD_HH-MM.md"""
     from datetime import datetime
     from mnemo import FerramentasVault
@@ -123,6 +123,8 @@ def _salvar_historico(mensagens: List[Dict[str, Any]], raiz_vault: str) -> None:
     caminho = f"historico/{ts}.md"
 
     linhas = [f"# Conversa {ts}\n"]
+    if modelo:
+        linhas.append(f"**Modelo:** {modelo}\n")
     for m in mensagens:
         if m["role"] == "system":
             continue
@@ -215,7 +217,7 @@ def main() -> None:
                 texto = ui.prompt("Tu: ")
             except (EOFError, KeyboardInterrupt):
                 ui.console.print("\n[Saindo... a gravar histórico]")
-                _salvar_historico(mensagens, vault_path)
+                _salvar_historico(mensagens, vault_path, cliente.modelo)
                 break
 
             if not texto:
@@ -224,33 +226,67 @@ def main() -> None:
             low = texto.lower()
             if low in {"sair", "exit", "quit"}:
                 ui.console.print("[Saindo... a gravar histórico]")
-                _salvar_historico(mensagens, vault_path)
+                _salvar_historico(mensagens, vault_path, cliente.modelo)
                 break
 
             if texto == "/salvar":
-                _salvar_historico(mensagens, vault_path)
+                _salvar_historico(mensagens, vault_path, cliente.modelo)
                 ui.console.print("[success]Conversa gravada em historico/[/success]\n")
                 continue
 
             if texto.startswith("/historico"):
-                parts = texto.split(maxsplit=2)
-                if len(parts) == 1:
-                    # Modo interativo (TUI)
-                    selected = ui.show_history_interactive(vault_path)
-                    if selected:
-                        loaded = ui.load_history_session(vault_path, selected)
-                        if loaded:
-                            mensagens = [{"role": "system", "content": INSTRUCAO_SISTEMA}] + loaded
-                            ui.console.print("[success]Sessão carregada — pode continuar a conversa.[/success]\n")
-                elif parts[1] == "search" and len(parts) == 3:
-                    ui.search_history(vault_path, parts[2])
-                elif parts[1] == "load" and len(parts) == 3:
-                    loaded = ui.load_history_session(vault_path, parts[2])
+                # Parse flags: --since YYYY-MM-DD --until YYYY-MM-DD --model <modelo>
+                import shlex
+                parts = shlex.split(texto)
+                
+                # Extrai flags
+                since = None
+                until = None
+                model = None
+                subcommand = None
+                subcommand_arg = None
+                
+                i = 1  # pula "/historico"
+                while i < len(parts):
+                    if parts[i] == "--since" and i + 1 < len(parts):
+                        since = parts[i + 1]
+                        i += 2
+                    elif parts[i] == "--until" and i + 1 < len(parts):
+                        until = parts[i + 1]
+                        i += 2
+                    elif parts[i] == "--model" and i + 1 < len(parts):
+                        model = parts[i + 1]
+                        i += 2
+                    elif parts[i] in ("search", "load"):
+                        subcommand = parts[i]
+                        if i + 1 < len(parts):
+                            subcommand_arg = parts[i + 1]
+                        i += 2
+                    else:
+                        i += 1
+                
+                if subcommand == "search" and subcommand_arg:
+                    ui.search_history(vault_path, subcommand_arg)
+                elif subcommand == "load" and subcommand_arg:
+                    loaded = ui.load_history_session(vault_path, subcommand_arg)
                     if loaded:
                         mensagens = [{"role": "system", "content": INSTRUCAO_SISTEMA}] + loaded
                         ui.console.print("[success]Sessão carregada — pode continuar a conversa.[/success]\n")
+                elif subcommand is None:
+                    # Modo interativo (TUI) ou lista simples
+                    if since or until or model:
+                        # Lista filtrada (não interativa)
+                        ui.show_history_list(vault_path, since=since, until=until, model=model, limit=20)
+                    else:
+                        # Modo interativo (TUI)
+                        selected = ui.show_history_interactive(vault_path)
+                        if selected:
+                            loaded = ui.load_history_session(vault_path, selected)
+                            if loaded:
+                                mensagens = [{"role": "system", "content": INSTRUCAO_SISTEMA}] + loaded
+                                ui.console.print("[success]Sessão carregada — pode continuar a conversa.[/success]\n")
                 else:
-                    ui.console.print("[warning]Uso:[/warning] /historico  |  /historico search <termo>  |  /historico load <id>")
+                    ui.console.print("[warning]Uso:[/warning] /historico [--since YYYY-MM-DD] [--until YYYY-MM-DD] [--model <modelo]]  |  /historico search <termo>  |  /historico load <id>")
                 continue
 
             if texto == "/limpar":
@@ -262,6 +298,7 @@ def main() -> None:
                     "Comandos disponíveis:\n"
                     "  /salvar                 Grava checkpoint da conversa em historico/\n"
                     "  /historico              Abre navegador interativo (setas ↑↓, Enter=carregar, q=sair)\n"
+                    "  /historico --since YYYY-MM-DD --until YYYY-MM-DD --model <modelo>  Lista filtrada\n"
                     "  /historico search <termo> Busca termo no histórico\n"
                     "  /historico load <id>    Carrega sessão anterior (continua conversa)\n"
                     "  /vault                  Mostra vault atual\n"

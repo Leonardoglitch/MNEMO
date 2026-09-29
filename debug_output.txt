@@ -1,0 +1,15 @@
+# Conversa 2026-09-27_11-34
+
+## 🧑 Tu
+diz o nome de todas as notas
+
+## 🤖 Mnemo
+
+
+
+> **Tool call:** `list_files`({})
+
+## 🤖 Mnemo
+> **Tool result** (`call-53382d8b-f903-4916-a4f9-df8c90b2cf90`):
+```json
+{"ok": true, "notas": [{"caminho": "estudo/python-basico.md", "titulo": "Python Básico"}, {"caminho": "estudo/rag-conceitos.md", "titulo": "Conceitos de RAG"}, {"caminho": "estudo/sqlite-notas.md", "titulo": "Notas sobre SQLite"}, {"caminho": "historico/2026-09-25_21-24.md", "titulo": "Conversa 2026

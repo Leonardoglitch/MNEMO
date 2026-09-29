@@ -180,7 +180,7 @@ def test_salvar_historico_cria_nota_com_tool_calls(vault_com_historico):
         {"role": "assistant", "content": "Encontrei."}
     ]
 
-    chat._salvar_historico(mensagens, str(vault_com_historico.armazenamento.perms.raiz))
+    chat._salvar_historico(mensagens, str(vault_com_historico.armazenamento.perms.raiz), "test-model")
 
     # Verifica que a nota foi criada em historico/
     historico_dir = vault_com_historico.armazenamento.perms.raiz / "notas" / "historico"

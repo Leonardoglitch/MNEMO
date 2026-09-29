@@ -168,15 +168,16 @@ class ChatUI:
                      self.config.get("model_default", "nvidia/nemotron-3-super-120b-a12b"))
 
     # ------------------------------------------------------------------ helpers para comandos
-    def show_history_list(self, vault_root: str) -> None:
+    def show_history_list(self, vault_root: str, since: str = None, until: str = None, model: str = None, limit: int = 10) -> None:
         hist_dir = Path(vault_root) / "notas" / "historico"
         if not hist_dir.exists():
             self.console.print("[muted]Nenhum histórico ainda.[/muted]")
             return
-        files = sorted(hist_dir.glob("*.md"), reverse=True)[:10]
+        files = self._filter_history_files(hist_dir, since, until, model)
         if not files:
-            self.console.print("[muted]Nenhum histórico ainda.[/muted]")
+            self.console.print("[muted]Nenhum histórico com esses filtros.[/muted]")
             return
+        files = files[:limit]
         lines = []
         for f in files:
             try:
@@ -189,6 +190,59 @@ class ChatUI:
                 preview = "(erro ao ler)"
             lines.append(f"  [info]{f.name}[/info] — {preview}")
         self.console.print("\n".join(lines))
+
+    def _filter_history_files(self, hist_dir: Path, since: str = None, until: str = None, model: str = None) -> List[Path]:
+        """Filtra arquivos de histórico por data e modelo."""
+        from datetime import datetime
+        
+        # Parse datas
+        since_dt = None
+        until_dt = None
+        if since:
+            try:
+                since_dt = datetime.strptime(since, "%Y-%m-%d")
+            except ValueError:
+                self.print_error(f"Formato de data inválido para --since: {since} (use YYYY-MM-DD)")
+                return []
+        if until:
+            try:
+                until_dt = datetime.strptime(until, "%Y-%m-%d")
+                # Inclui o dia todo
+                until_dt = until_dt.replace(hour=23, minute=59, second=59)
+            except ValueError:
+                self.print_error(f"Formato de data inválido para --until: {until} (use YYYY-MM-DD)")
+                return []
+
+        files = sorted(hist_dir.glob("*.md"), reverse=True)
+        filtered = []
+        
+        for f in files:
+            # Extrai data do nome do arquivo (formato: YYYY-MM-DD_HH-MM.md)
+            try:
+                date_str = f.stem.split("_")[0] + "_" + f.stem.split("_")[1]
+                file_dt = datetime.strptime(date_str, "%Y-%m-%d_%H-%M")
+            except (ValueError, IndexError):
+                # Se não conseguir parsear a data, usa mtime
+                file_dt = datetime.fromtimestamp(f.stat().st_mtime)
+            
+            # Filtro por data
+            if since_dt and file_dt < since_dt:
+                continue
+            if until_dt and file_dt > until_dt:
+                continue
+            
+            # Filtro por modelo (busca no conteúdo)
+            if model:
+                try:
+                    txt = f.read_text(encoding="utf-8")
+                    if model.lower() not in txt.lower():
+                        continue
+                except Exception:
+                    continue
+            
+            filtered.append(f)
+        
+        return filtered
 
     def show_config(self) -> None:
         data = self.config.data
@@ -320,7 +374,7 @@ class ChatUI:
         return mensagens
 
     # ------------------------------------------------------------------ histórico interativo (TUI)
-    def show_history_interactive(self, vault_root: str) -> Optional[str]:
+    def show_history_interactive(self, vault_root: str, since: str = None, until: str = None, model: str = None) -> Optional[str]:
         """
         Abre TUI interativa para navegar no histórico.
         Retorna o nome do arquivo selecionado ou None se cancelado.
@@ -330,9 +384,9 @@ class ChatUI:
             self.console.print("[muted]Nenhum histórico ainda.[/muted]")
             return None
 
-        files = sorted(hist_dir.glob("*.md"), reverse=True)
+        files = self._filter_history_files(hist_dir, since, until, model)
         if not files:
-            self.console.print("[muted]Nenhum histórico ainda.[/muted]")
+            self.console.print("[muted]Nenhum histórico com esses filtros.[/muted]")
             return None
 
         # Prepara dados para a lista
