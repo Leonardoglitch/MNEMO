@@ -26,7 +26,7 @@ MNEMO/
 │   ├── indexador.py
 │   ├── ferramentas.py
 │   └── modelo_nvidia.py
-├── tests/              # 44 testes pytest
+├── tests/              # 56 testes pytest
 ├── vault-teste/        # vault de demonstração (commit-safe)
 ├── chat.py             # CLI interativo
 ├── chat_ui.py          # UI (rich + prompt_toolkit)
@@ -62,7 +62,7 @@ Pode definir vault/modelo/tema padrão via CLI e gravar com `--save-config`.
 
 ```bash
 python -m pytest tests/ -v
-# 44 testes: permissões, índice, modelo NVIDIA, chat, ferramentas, UI, config
+# 56 testes: permissões, índice, modelo NVIDIA, chat, ferramentas, UI, config, histórico
 ```
 
 ## Uso Rápido
@@ -89,7 +89,12 @@ python chat.py
 | Comando | Descrição |
 |---------|-----------|
 | `/salvar` | Grava checkpoint da conversa em `historico/YYYY-MM-DD_HH-MM.md` |
-| `/historico` | Lista últimos 10 registos em `historico/` com preview |
+| `/historico` | **Abre navegador interativo (TUI)** — setas ↑↓, Enter=carregar, q/Esc=sair |
+| `/historico --since YYYY-MM-DD --until YYYY-MM-DD --model <id>` | Lista filtrada por data/modelo |
+| `/historico search <termo>` | Busca termo no histórico com preview contextual |
+| `/historico load <id>` | Carrega sessão anterior e continua conversa |
+| `/historico export <arquivo.json> [--since ...] [--until ...] [--model ...]` | Exporta histórico para JSON |
+| `/historico import <arquivo.json>` | Importa histórico de JSON (pula duplicados) |
 | `/vault` | Mostra vault atual |
 | `/vault <path>` | Indica como trocar vault (reiniciar com `--vault`) |
 | `/modelo <id>` | Troca modelo NVIDIA (ex.: `/modelo nvidia/nemotron-3-ultra`) |
@@ -114,6 +119,42 @@ python chat.py
 
 Definir via CLI: `python chat.py --theme dark` ou no REPL: `/config theme dark`.
 
+### Histórico Navegável (TUI)
+
+O comando `/historico` sem argumentos abre uma **interface interativa (TUI)** com navegação por setas:
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│ ▶ 2026-09-27_11-11.md — analisa todas as notas...          │
+│   2026-09-27_10-32.md — diz o nome de todas as notas...    │
+│   2026-09-26_11-10.md — continuação da análise...          │
+└─────────────────────────────────────────────────────────────┘
+```
+
+**Controles:**
+- `↑` / `↓` — navega na lista
+- `Enter` — carrega a sessão e continua conversa
+- `q` / `Esc` / `Ctrl+C` — cancela
+
+**Filtros na TUI:**
+```bash
+/historico --since 2026-09-27          # abre TUI só com sessões a partir desta data
+/historico --model nemotron            # abre TUI filtrado por modelo
+/historico --since 2026-09-26 --until 2026-09-27 --model nemotron
+```
+
+**Busca textual:**
+```bash
+/historico search python               # busca "python" em todo o histórico
+```
+
+**Export/Import (backup/migração):**
+```bash
+/historico export backup.json                          # exporta tudo
+/historico export backup.json --since 2026-09-27       # exporta filtrado
+/historico import backup.json                          # importa (pula duplicados)
+```
+
 ## Componentes Principais
 
 | Módulo | Responsabilidade |
@@ -124,7 +165,7 @@ Definir via CLI: `python chat.py --theme dark` ou no REPL: `/config theme dark`.
 | `ferramentas.py` | search, read_note, create_note, append_to_note |
 | `modelo_nvidia.py` | Cliente HTTP OpenAI-compatível p/ Nemotron |
 | `chat.py` | Loop tool-calling com histórico de mensagens |
-| `chat_ui.py` | UI rich + prompt_toolkit (cores, spinners, histórico navegável, autocomplete) |
+| `chat_ui.py` | UI rich + prompt_toolkit (cores, spinners, histórico navegável, autocomplete, **TUI interativa, busca, filtros, export/import**) |
 | `config.py` | Configuração persistente `~/.mnemo/config.json` |
 
 ## Convenções Git
