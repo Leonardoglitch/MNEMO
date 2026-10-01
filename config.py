@@ -3,8 +3,9 @@
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 
 
 CONFIG_DIR = Path.home() / ".mnemo"
@@ -65,3 +66,38 @@ class Config:
 
     def __repr__(self) -> str:
         return f"Config({self.data})"
+
+    def validate(self, vault_root: Optional[str] = None) -> List[str]:
+        """Valida configuração e retorna lista de erros (vazia se OK)."""
+        errors = []
+        
+        # API key
+        if not os.environ.get("NVIDIA_API_KEY"):
+            errors.append("NVIDIA_API_KEY não definida no .env ou variáveis de ambiente")
+        
+        # Vault
+        vault_path = Path(vault_root or self.get("vault_default", ""))
+        if not vault_path.exists():
+            errors.append(f"Vault não existe: {vault_path}")
+        else:
+            # Verifica pastas permitidas
+            try:
+                from mnemo.permissoes import Permissoes
+                perms = Permissoes(str(vault_path))
+                for p in perms.raizes_permitidas():
+                    if not p.exists():
+                        errors.append(f"Pasta permitida não existe: {p}")
+            except Exception as e:
+                errors.append(f"Erro ao validar permissões do vault: {e}")
+        
+        # Timeout válido
+        timeout = self.get("timeout", 60)
+        if not isinstance(timeout, (int, float)) or timeout <= 0:
+            errors.append(f"Timeout inválido: {timeout} (deve ser número > 0)")
+        
+        # Fallback models
+        fallbacks = self.get("fallback_models", [])
+        if not isinstance(fallbacks, list):
+            errors.append("fallback_models deve ser uma lista")
+        
+        return errors

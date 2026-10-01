@@ -173,6 +173,14 @@ def main() -> None:
 
     vault_path = config.get("vault_default", "vault-teste")
 
+    # Validação de configuração no startup
+    errors = config.validate(vault_path)
+    if errors:
+        ui.console.print("[error]Configuração inválida:[/error]")
+        for e in errors:
+            ui.console.print(f"  - {e}")
+        sys.exit(1)
+
     # UI
     config.set("theme", config.get("theme", "auto"))  # garante theme
     ui = ChatUI(config)
@@ -189,10 +197,8 @@ def main() -> None:
 
     # Inicializa vault e UI
     with FerramentasVault(vault_path) as vault:
-        # atualiza completer com pastas permitidas
-        pastas = [str(p.relative_to(vault.armazenamento.perms.notas)) for p in vault.armazenamento.perms.raizes_permitidas()]
-        ui.config = ui.config  # no-op, garante instância
-        ui.update_completer([p.rstrip("/") for p in pastas])
+        # atualiza completer com pastas permitidas (path completion)
+        ui.update_completer(vault_path)
 
         # Health check rápido com retry
         health_ok = False
@@ -297,24 +303,44 @@ def main() -> None:
                 ui.clear()
                 continue
 
+            if texto == "/status":
+                ui.show_status(vault_path, cliente, config)
+                continue
+
             if texto == "/ajuda":
                 ui.console.print(Panel(
-                    "Comandos disponíveis:\n"
-                    "  /salvar                 Grava checkpoint da conversa em historico/\n"
-                    "  /historico              Abre navegador interativo (setas ↑↓, Enter=carregar, q=sair)\n"
-                    "  /historico --since YYYY-MM-DD --until YYYY-MM-DD --model <modelo>  Lista filtrada\n"
-                    "  /historico search <termo> Busca termo no histórico\n"
-                    "  /historico load <id>    Carrega sessão anterior (continua conversa)\n"
-                    "  /historico export <arquivo.json> [--since ...] [--until ...] [--model ...]  Exporta para JSON\n"
-                    "  /historico import <arquivo.json>  Importa de JSON\n"
-                    "  /vault                  Mostra vault atual\n"
-                    "  /vault <path>           Troca vault (reinicializa)\n"
-                    "  /modelo <id>            Troca modelo NVIDIA\n"
-                    "  /limpar                 Limpa ecrã\n"
-                    "  /config                 Mostra configuração\n"
-                    "  /config theme dark|light|auto  Altera tema\n"
-                    "  /ajuda                  Mostra esta ajuda\n"
-                    "  sair / exit / quit      Termina a conversa",
+                    "NAVEGAÇÃO & HISTÓRICO\n"
+                    "  /historico                    # TUI interativa (↑↓, Enter=carregar, q=sair)\n"
+                    "  /historico --since 2026-01-01 # TUI filtrada por data\n"
+                    "  /historico --model nemotron   # TUI filtrada por modelo\n"
+                    "  /historico search python      # Busca textual com preview\n"
+                    "  /historico load 2026-09-27    # Carrega sessão e continua conversa\n"
+                    "  /historico export backup.json # Exporta tudo para JSON\n"
+                    "  /historico export b.json --since 2026-01-01  # Exporta filtrado\n"
+                    "  /historico import backup.json # Importa (pula duplicados)\n\n"
+                    "VAULT & CONFIG\n"
+                    "  /vault                        # Mostra vault atual\n"
+                    "  /vault ~/meu-vault            # Troca vault (reiniciar)\n"
+                    "  /status                       # Estado completo do sistema\n"
+                    "  /config                       # Mostra config\n"
+                    "  /config theme dark            # Tema escuro\n"
+                    "  /config model nvidia/nemotron-3-ultra  # Modelo padrão\n"
+                    "  /config vault ~/meu-vault     # Vault padrão\n"
+                    "  /config timeout 60            # Timeout 60s\n"
+                    "  /config fallback m1,m2        # Modelos fallback\n"
+                    "  /config reset                 # Reset para padrões\n\n"
+                    "MODELO\n"
+                    "  /modelo nvidia/nemotron-3-ultra  # Troca modelo (sessão)\n\n"
+                    "NOTAS (usam autocomplete Tab)\n"
+                    "  create_note projetos/plano.md     # Cria nota\n"
+                    "  read_note projetos/plano.md       # Lê nota\n"
+                    "  append_to_note projetos/plano.md  # Anexa conteúdo\n"
+                    "  search python                     # Busca semântica\n"
+                    "  list_files projetos/              # Lista pasta\n\n"
+                    "OUTROS\n"
+                    "  /salvar              # Checkpoint em historico/\n"
+                    "  /limpar              # Limpa ecrã\n"
+                    "  sair / exit / quit   # Sai (auto-save)",
                     title="Ajuda", border_style="info"))
                 continue
 

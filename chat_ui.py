@@ -16,7 +16,7 @@ from rich.status import Status
 from rich.theme import Theme
 from prompt_toolkit import PromptSession
 from prompt_toolkit.history import FileHistory
-from prompt_toolkit.completion import WordCompleter
+from prompt_toolkit.completion import WordCompleter, Completer, Completion
 from prompt_toolkit.key_binding import KeyBindings
 from prompt_toolkit.application import Application
 from prompt_toolkit.layout import Layout, Window
@@ -65,16 +65,20 @@ class ChatUI:
             })
 
     # ------------------------------------------------------------------ prompt_toolkit
-    def _setup_prompt_session(self) -> None:
+    def _setup_prompt_session(self, vault_root: str = None) -> None:
         history_file = Path.home() / ".mnemo" / "chat_history"
         history_file.parent.mkdir(parents=True, exist_ok=True)
 
         # completer com comandos + pastas permitidas (será atualizado depois)
         base_commands = [
             "/salvar", "/historico", "/vault", "/modelo",
-            "/limpar", "/config", "/ajuda", "sair", "exit", "quit"
+            "/limpar", "/config", "/ajuda", "/status", "sair", "exit", "quit"
         ]
-        completer = WordCompleter(base_commands, ignore_case=True, sentence=True)
+        
+        if vault_root:
+            completer = PathCompleter(vault_root, base_commands)
+        else:
+            completer = WordCompleter(base_commands, ignore_case=True, sentence=True)
 
         kb = KeyBindings()
 
@@ -101,17 +105,57 @@ class ChatUI:
         self._base_commands = base_commands
         self._completer = completer
 
-    def update_completer(self, pastas_permitidas: List[str]) -> None:
-        """Atualiza auto-complete com pastas permitidas do vault."""
-        # Adiciona completions para pastas/ e pastas/arquivo.md
-        folder_completions = []
-        for p in pastas_permitidas:
-            folder_completions.append(f"{p}/")
-            # Adiciona sugestões de arquivos .md comuns
-            folder_completions.append(f"{p}/")
-        model_completions = self.get_model_completions()
-        words = self._base_commands + folder_completions + model_completions
-        self._completer.words = words
+    def update_completer(self, vault_root: str) -> None:
+        """Atualiza auto-complete com pastas permitidas do vault (com path completion)."""
+        self._completer = PathCompleter(vault_root, self._base_commands)
+        self.session.completer = self._completer
+
+
+class PathCompleter(Completer):
+    """Completer contextual: completa paths para comandos de nota, comandos gerais caso contrário."""
+    
+    def __init__(self, vault_root: str, base_commands: List[str]):
+        self.vault_root = vault_root
+        self.base_commands = base_commands
+        from mnemo.permissoes import Permissoes
+        self.perms = Permissoes(vault_root)
+    
+    def get_completions(self, document, complete_event):
+        text = document.text_before_cursor
+        
+        # Comandos de nota que aceitam paths
+        for cmd in ["create_note", "read_note", "append_to_note", "list_files"]:
+            if text.startswith(cmd + " "):
+                prefix = text[len(cmd) + 1:]
+                yield from self._complete_path(prefix)
+                return
+        
+        # Completer padrão: comandos + pastas raiz
+        for cmd in self.base_commands:
+            if cmd.startswith(text):
+                yield Completion(cmd, start_position=-len(text))
+        for p in self.perms.raizes_permitidas():
+            folder = str(p.relative_to(self.perms.notas)) + "/"
+            if folder.startswith(text):
+                yield Completion(folder, start_position=-len(text))
+    
+    def _complete_path(self, prefix: str):
+        """Completa caminhos relativos a notas/ dentro de pastas permitidas."""
+        base = self.perms.notas
+        
+        # Se prefix tem "/", completa dentro da pasta
+        if "/" in prefix:
+            folder, partial = prefix.rsplit("/", 1)
+            folder_path = base / folder
+            if folder_path.exists() and folder_path.is_dir():
+                for f in folder_path.glob(f"{partial}*.md"):
+                    yield Completion(f"{folder}/{f.name}", start_position=-len(partial))
+        else:
+            # Senão, completa pastas permitidas
+            for p in self.perms.raizes_permitidas():
+                rel = str(p.relative_to(base)) + "/"
+                if rel.startswith(prefix):
+                    yield Completion(rel, start_position=-len(prefix))
 
     # ------------------------------------------------------------------ public API
     def welcome(self, vault: str, model: str) -> None:
@@ -134,10 +178,12 @@ class ChatUI:
             yield
 
     def print_streaming(self, generator) -> str:
-        """Exibe resposta em streaming com Live e retorna texto completo."""
+        """Exibe resposta em streaming com Live e retorna texto completo.
+        Simula efeito de streaming palavra-a-palavra (sem chamada extra à API)."""
+        import time
         full_text = ""
         md = Markdown("")
-        with Live(md, console=self.console, refresh_per_second=10, transient=False) as live:
+        with Live(md, console=self.console, refresh_per_second=15, transient=False) as live:
             for chunk in generator:
                 if "delta" in chunk:
                     delta = chunk["delta"]
@@ -147,6 +193,8 @@ class ChatUI:
                         # Re-render markdown with accumulated text
                         md = Markdown(full_text)
                         live.update(md)
+                        # Simula streaming visual: ~100 chars/seg
+                        time.sleep(0.01)
         return full_text
 
     def print_response(self, text: str) -> None:
@@ -156,6 +204,46 @@ class ChatUI:
 
     def print_error(self, msg: str) -> None:
         self.console.print(f"[error]Erro:[/error] {msg}")
+
+    def show_status(self, vault_root: str, cliente: "ClienteNVIDIA", config: Config) -> None:
+        """Mostra painel com estado completo do sistema."""
+        from mnemo.permissoes import Permissoes
+        
+        perms = Permissoes(vault_root)
+        pastas = [str(p.relative_to(perms.notas)) for p in perms.raizes_permitidas()]
+        
+        notas_por_pasta = {}
+        total = 0
+        for p in pastas:
+            pasta_path = perms.notas / p
+            if pasta_path.exists():
+                count = len(list(pasta_path.rglob("*.md")))
+            else:
+                count = 0
+            notas_por_pasta[p] = count
+            total += count
+        
+        index_path = perms.vault / ".vault" / "index.db"
+        index_size = index_path.stat().st_size if index_path.exists() else 0
+        
+        table = Table(show_header=False, box=None, padding=(0, 1))
+        table.add_column("Key", style="info")
+        table.add_column("Value")
+        table.add_row("Vault", f"{perms.vault.name} ({vault_root})")
+        table.add_row("Modelo", cliente.modelo)
+        table.add_row("Tema", config.get("theme", "auto"))
+        table.add_row("", "")
+        table.add_row("Pastas permitidas:", "")
+        for pasta, count in notas_por_pasta.items():
+            table.add_row(f"  {pasta}/", f"{count} notas")
+        table.add_row("  TOTAL", f"{total} notas")
+        table.add_row("", "")
+        table.add_row("Índice FTS5", f"{index_size / 1024:.0f} KB")
+        table.add_row("Timeout API", f"{config.get('timeout', 30)}s")
+        fallbacks = config.get("fallback_models", [])
+        table.add_row("Fallback", ", ".join(fallbacks) if fallbacks else "(nenhum)")
+        
+        self.console.print(Panel(table, title="STATUS", border_style="info"))
 
     def print_panel(self, title: str, content: str) -> None:
         self.console.print(Panel(content, title=title, border_style="info"))
