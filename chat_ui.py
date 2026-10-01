@@ -24,6 +24,7 @@ from prompt_toolkit.layout.controls import FormattedTextControl
 from prompt_toolkit.styles import Style
 
 from config import Config
+from rich.table import Table
 
 
 class ChatUI:
