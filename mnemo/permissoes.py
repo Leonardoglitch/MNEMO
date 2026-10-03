@@ -21,6 +21,7 @@ Exemplo de config.json:
 
 import json
 from pathlib import Path
+from typing import List
 
 
 class PermissaoNegada(Exception):
@@ -28,15 +29,15 @@ class PermissaoNegada(Exception):
 
 
 class Permissoes:
-    def __init__(self, raiz_vault):
+    def __init__(self, raiz_vault: str) -> None:
         self.raiz = Path(raiz_vault).resolve()
         self.notas = (self.raiz / "notas").resolve()
         self.config_path = self.raiz / ".vault" / "config.json"
         self.todas_as_pastas = False
-        self.pastas_permitidas = []
+        self.pastas_permitidas: List[str] = []
         self.carregar()
 
-    def carregar(self):
+    def carregar(self) -> None:
         """Lê o config.json. Sem ficheiro, por defeito nada é permitido."""
         if not self.config_path.exists():
             return
@@ -44,7 +45,7 @@ class Permissoes:
         self.todas_as_pastas = bool(dados.get("todas_as_pastas", False))
         self.pastas_permitidas = list(dados.get("pastas_permitidas", []))
 
-    def _resolver(self, caminho_relativo):
+    def _resolver(self, caminho_relativo: str) -> Path:
         """Converte para caminho absoluto e garante que fica dentro de notas/.
 
         resolve() elimina '../' e segue links simbólicos, por isso truques
@@ -55,7 +56,7 @@ class Permissoes:
             raise PermissaoNegada(f"Caminho fora do vault: {caminho_relativo}")
         return alvo
 
-    def verificar(self, caminho_relativo):
+    def verificar(self, caminho_relativo: str) -> Path:
         """Devolve o caminho absoluto se for permitido; senão levanta erro."""
         alvo = self._resolver(caminho_relativo)
         if self.todas_as_pastas:
@@ -66,7 +67,7 @@ class Permissoes:
                 return alvo
         raise PermissaoNegada(f"Sem permissão para: {caminho_relativo}")
 
-    def raizes_permitidas(self):
+    def raizes_permitidas(self) -> List[Path]:
         """Pastas que o indexador pode percorrer (e enviar à API de embeddings)."""
         if self.todas_as_pastas:
             return [self.notas]
@@ -75,6 +76,6 @@ class Permissoes:
 
 # --- Exemplo de uma ferramenta do agente a usar o módulo ---
 
-def read_note(perms, caminho_relativo):
+def read_note(perms: Permissoes, caminho_relativo: str) -> str:
     alvo = perms.verificar(caminho_relativo)
     return alvo.read_text(encoding="utf-8")

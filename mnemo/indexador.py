@@ -12,6 +12,7 @@ de ser permitida deixa logo de aparecer, mesmo antes de reindexar.
 import re
 import sqlite3
 from pathlib import Path
+from typing import Dict, List, Optional, Tuple
 
 from .permissoes import Permissoes, PermissaoNegada
 
@@ -29,7 +30,7 @@ CREATE VIRTUAL TABLE IF NOT EXISTS notas_fts USING fts5(
 """
 
 
-def separar_frontmatter(conteudo):
+def separar_frontmatter(conteudo: str) -> Tuple[List[str], str]:
     """Separa o bloco '---' do início. Devolve (linhas_do_frontmatter, corpo)."""
     linhas = conteudo.splitlines()
     if linhas and linhas[0].strip() == "---":
@@ -39,7 +40,7 @@ def separar_frontmatter(conteudo):
     return [], conteudo
 
 
-def extrair_titulo(conteudo, nome_ficheiro):
+def extrair_titulo(conteudo: str, nome_ficheiro: str) -> str:
     """Título = 'title:' do frontmatter, senão o 1.º '# título', senão o nome."""
     frontmatter, corpo = separar_frontmatter(conteudo)
     for linha in frontmatter:
@@ -54,7 +55,7 @@ def extrair_titulo(conteudo, nome_ficheiro):
 
 
 class Indexador:
-    def __init__(self, perms: Permissoes, caminho_db=None):
+    def __init__(self, perms: Permissoes, caminho_db: Optional[str] = None) -> None:
         self.perms = perms
         self.caminho_db = (
             Path(caminho_db) if caminho_db else perms.raiz / ".vault" / "index.db"
@@ -65,10 +66,10 @@ class Indexador:
 
     # --- helpers internos ---
 
-    def _rel(self, alvo):
+    def _rel(self, alvo: Path) -> str:
         return alvo.relative_to(self.perms.notas).as_posix()
 
-    def _gravar(self, rel, alvo):
+    def _gravar(self, rel: str, alvo: Path) -> None:
         conteudo = alvo.read_text(encoding="utf-8-sig", errors="replace")
         titulo = extrair_titulo(conteudo, alvo.stem)
         _, corpo = separar_frontmatter(conteudo)  # o frontmatter não polui os excertos
@@ -94,7 +95,7 @@ class Indexador:
             (nota_id, titulo, corpo),
         )
 
-    def _remover(self, rel):
+    def _remover(self, rel: str) -> None:
         linha = self.con.execute(
             "SELECT id FROM notas WHERE caminho = ?", (rel,)
         ).fetchone()
@@ -102,9 +103,9 @@ class Indexador:
             self.con.execute("DELETE FROM notas_fts WHERE rowid = ?", (linha[0],))
             self.con.execute("DELETE FROM notas WHERE id = ?", (linha[0],))
 
-    def _notas_validas(self):
+    def _notas_validas(self) -> Dict[str, Path]:
         """Notas .md nas pastas permitidas: {caminho_relativo: caminho_absoluto}."""
-        validas = {}
+        validas: Dict[str, Path] = {}
         for raiz in self.perms.raizes_permitidas():
             if not raiz.is_dir():
                 continue
@@ -122,7 +123,7 @@ class Indexador:
 
     # --- API pública ---
 
-    def reindexar_tudo(self, forcar=False):
+    def reindexar_tudo(self, forcar: bool = False) -> Dict[str, int]:
         """Sincroniza o índice com as pastas permitidas.
 
         Só relê os ficheiros cuja data de modificação mudou (ou todos, com
@@ -136,7 +137,7 @@ class Indexador:
                 "SELECT caminho, modificado_ns FROM notas"
             )
         }
-        resumo = {"novas": 0, "atualizadas": 0, "removidas": 0, "inalteradas": 0}
+        resumo: Dict[str, int] = {"novas": 0, "atualizadas": 0, "removidas": 0, "inalteradas": 0}
         for rel, alvo in validas.items():
             if rel not in existentes:
                 self._gravar(rel, alvo)
@@ -152,7 +153,7 @@ class Indexador:
         self.con.commit()
         return resumo
 
-    def atualizar_nota(self, caminho):
+    def atualizar_nota(self, caminho: str) -> None:
         """Reindexa uma nota (ou remove-a do índice se já não existir)."""
         alvo = self.perms.verificar(caminho)
         rel = self._rel(alvo)
@@ -162,12 +163,12 @@ class Indexador:
             self._remover(rel)
         self.con.commit()
 
-    def remover_nota(self, caminho):
+    def remover_nota(self, caminho: str) -> None:
         alvo = self.perms.verificar(caminho)
         self._remover(self._rel(alvo))
         self.con.commit()
 
-    def pesquisar(self, consulta, limite=10):
+    def pesquisar(self, consulta: str, limite: int = 10) -> List[Dict[str, object]]:
         """Devolve [{caminho, titulo, excerto, relevancia}], das mais relevantes.
 
         A consulta é limpa para só ter palavras (aspas, hífenes ou operadores
@@ -189,7 +190,7 @@ class Indexador:
             """,
             (expressao,),
         )
-        resultados = []
+        resultados: List[Dict[str, object]] = []
         for caminho, titulo, excerto, pontuacao in cursor:
             try:
                 self.perms.verificar(caminho)  # defesa em profundidade
@@ -207,11 +208,11 @@ class Indexador:
                 break
         return resultados
 
-    def fechar(self):
+    def fechar(self) -> None:
         self.con.close()
 
-    def __enter__(self):
+    def __enter__(self) -> "Indexador":
         return self
 
-    def __exit__(self, *_):
+    def __exit__(self, *_: object) -> None:
         self.fechar()

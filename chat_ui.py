@@ -6,7 +6,7 @@ import json
 from contextlib import contextmanager
 from datetime import datetime
 from pathlib import Path
-from typing import List, Dict, Any, Generator, Optional
+from typing import TYPE_CHECKING, List, Dict, Any, Generator, Optional, Union
 
 from rich.console import Console
 from rich.live import Live
@@ -26,13 +26,22 @@ from prompt_toolkit.styles import Style
 from config import Config
 from rich.table import Table
 
+if TYPE_CHECKING:
+    from mnemo.modelo_nvidia import ClienteNVIDIA
+
+
+CompleterType = Union[WordCompleter, "PathCompleter"]
+
 
 class ChatUI:
     """Camada de apresentação do chat (cores, painéis, spinners, input)."""
 
-    def __init__(self, config: Config):
+    def __init__(self, config: Config) -> None:
         self.config = config
         self.console = Console(theme=self._build_theme())
+        self._base_commands: List[str] = []
+        self._completer: Optional[CompleterType] = None
+        self.session: PromptSession = PromptSession()  # placeholder
         self._setup_prompt_session()
 
     # ------------------------------------------------------------------ theme
@@ -65,7 +74,7 @@ class ChatUI:
             })
 
     # ------------------------------------------------------------------ prompt_toolkit
-    def _setup_prompt_session(self, vault_root: str = None) -> None:
+    def _setup_prompt_session(self, vault_root: Optional[str] = None) -> None:
         history_file = Path.home() / ".mnemo" / "chat_history"
         history_file.parent.mkdir(parents=True, exist_ok=True)
 
@@ -74,9 +83,10 @@ class ChatUI:
             "/salvar", "/historico", "/vault", "/modelo",
             "/limpar", "/config", "/ajuda", "/status", "sair", "exit", "quit"
         ]
+        self._base_commands = base_commands
         
         if vault_root:
-            completer = PathCompleter(vault_root, base_commands)
+            completer: CompleterType = PathCompleter(vault_root, base_commands)
         else:
             completer = WordCompleter(base_commands, ignore_case=True, sentence=True)
 
@@ -102,7 +112,6 @@ class ChatUI:
             key_bindings=kb,
             complete_while_typing=True,
         )
-        self._base_commands = base_commands
         self._completer = completer
 
     def update_completer(self, vault_root: str) -> None:
@@ -114,13 +123,13 @@ class ChatUI:
 class PathCompleter(Completer):
     """Completer contextual: completa paths para comandos de nota, comandos gerais caso contrário."""
     
-    def __init__(self, vault_root: str, base_commands: List[str]):
+    def __init__(self, vault_root: str, base_commands: List[str]) -> None:
         self.vault_root = vault_root
         self.base_commands = base_commands
         from mnemo.permissoes import Permissoes
         self.perms = Permissoes(vault_root)
     
-    def get_completions(self, document, complete_event):
+    def get_completions(self, document, complete_event) -> Generator[Completion, None, None]:
         text = document.text_before_cursor
         
         # Comandos de nota que aceitam paths
@@ -139,7 +148,7 @@ class PathCompleter(Completer):
             if folder.startswith(text):
                 yield Completion(folder, start_position=-len(text))
     
-    def _complete_path(self, prefix: str):
+    def _complete_path(self, prefix: str) -> Generator[Completion, None, None]:
         """Completa caminhos relativos a notas/ dentro de pastas permitidas."""
         base = self.perms.notas
         
@@ -257,7 +266,7 @@ class PathCompleter(Completer):
                      self.config.get("model_default", "nvidia/nemotron-3-super-120b-a12b"))
 
     # ------------------------------------------------------------------ helpers para comandos
-    def show_history_list(self, vault_root: str, since: str = None, until: str = None, model: str = None, limit: int = 10) -> None:
+    def show_history_list(self, vault_root: str, since: Optional[str] = None, until: Optional[str] = None, model: Optional[str] = None, limit: int = 10) -> None:
         hist_dir = Path(vault_root) / "notas" / "historico"
         if not hist_dir.exists():
             self.console.print("[muted]Nenhum histórico ainda.[/muted]")
@@ -280,7 +289,7 @@ class PathCompleter(Completer):
             lines.append(f"  [info]{f.name}[/info] — {preview}")
         self.console.print("\n".join(lines))
 
-    def _filter_history_files(self, hist_dir: Path, since: str = None, until: str = None, model: str = None) -> List[Path]:
+    def _filter_history_files(self, hist_dir: Path, since: Optional[str] = None, until: Optional[str] = None, model: Optional[str] = None) -> List[Path]:
         """Filtra arquivos de histórico por data e modelo."""
         from datetime import datetime
         
@@ -463,7 +472,7 @@ class PathCompleter(Completer):
         return mensagens
 
     # ------------------------------------------------------------------ histórico interativo (TUI)
-    def show_history_interactive(self, vault_root: str, since: str = None, until: str = None, model: str = None) -> Optional[str]:
+    def show_history_interactive(self, vault_root: str, since: Optional[str] = None, until: Optional[str] = None, model: Optional[str] = None) -> Optional[str]:
         """
         Abre TUI interativa para navegar no histórico.
         Retorna o nome do arquivo selecionado ou None se cancelado.

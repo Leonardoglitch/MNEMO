@@ -48,7 +48,7 @@ class ClienteNVIDIA:
         fallback_models: Optional[List[str]] = None,
         max_retries: int = 3,
         base_delay: float = 2.0,
-    ):
+    ) -> None:
         self.chave_api = chave_api or os.environ.get("NVIDIA_API_KEY")
         if not self.chave_api:
             raise ErroModeloNVIDIA(
@@ -85,7 +85,7 @@ class ClienteNVIDIA:
             dados = json.loads(resposta.read().decode("utf-8"))
             return dados
 
-    def _iter_stream(self, resposta) -> Generator[Dict[str, Any], None, None]:
+    def _iter_stream(self, resposta: urllib.request.urlopen) -> Generator[Dict[str, Any], None, None]:
         """Itera sobre resposta de streaming (Server-Sent Events)."""
         for linha in resposta:
             linha = linha.decode("utf-8").strip()

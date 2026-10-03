@@ -29,7 +29,7 @@ DEFAULTS: Dict[str, Any] = {
 class Config:
     """Carrega, valida e grava ~/.mnemo/config.json."""
 
-    def __init__(self, data: Optional[Dict[str, Any]] = None):
+    def __init__(self, data: Optional[Dict[str, Any]] = None) -> None:
         self.data = {**DEFAULTS, **(data or {})}
 
     @classmethod
@@ -69,12 +69,12 @@ class Config:
 
     def validate(self, vault_root: Optional[str] = None) -> List[str]:
         """Valida configuração e retorna lista de erros (vazia se OK)."""
-        errors = []
-        
+        errors: List[str] = []
+
         # API key
         if not os.environ.get("NVIDIA_API_KEY"):
             errors.append("NVIDIA_API_KEY não definida no .env ou variáveis de ambiente")
-        
+
         # Vault
         vault_path = Path(vault_root or self.get("vault_default", ""))
         if not vault_path.exists():
@@ -89,15 +89,15 @@ class Config:
                         errors.append(f"Pasta permitida não existe: {p}")
             except Exception as e:
                 errors.append(f"Erro ao validar permissões do vault: {e}")
-        
+
         # Timeout válido
         timeout = self.get("timeout", 60)
         if not isinstance(timeout, (int, float)) or timeout <= 0:
             errors.append(f"Timeout inválido: {timeout} (deve ser número > 0)")
-        
+
         # Fallback models
         fallbacks = self.get("fallback_models", [])
         if not isinstance(fallbacks, list):
             errors.append("fallback_models deve ser uma lista")
-        
+
         return errors

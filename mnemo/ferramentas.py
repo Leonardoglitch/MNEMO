@@ -72,17 +72,17 @@ class FerramentasVault:
         },
     ]
 
-    def __init__(self, raiz_vault: str):
+    def __init__(self, raiz_vault: str) -> None:
         self.perms = Permissoes(raiz_vault)
         self.indexador = Indexador(self.perms)
         self.indexador.reindexar_tudo()
         self.armazenamento = Armazenamento(self.perms, indexador=self.indexador)
 
     # --- context manager ---
-    def __enter__(self):
+    def __enter__(self) -> "FerramentasVault":
         return self
 
-    def __exit__(self, *_):
+    def __exit__(self, *_: object) -> None:
         self.indexador.fechar()
 
     # --- API pública ---
