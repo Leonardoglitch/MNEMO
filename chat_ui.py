@@ -6,7 +6,7 @@ import json
 from contextlib import contextmanager
 from datetime import datetime
 from pathlib import Path
-from typing import TYPE_CHECKING, List, Dict, Any, Generator, Optional, Union, Tuple
+from typing import TYPE_CHECKING, List, Dict, Any, Generator, Optional, Union, Tuple, Callable
 
 from rich.console import Console
 from rich.live import Live
@@ -22,6 +22,8 @@ from prompt_toolkit.application import Application
 from prompt_toolkit.layout import Layout, Window
 from prompt_toolkit.layout.controls import FormattedTextControl
 from prompt_toolkit.styles import Style
+from prompt_toolkit.document import Document
+from prompt_toolkit.completion import CompleteEvent
 
 from config import Config
 from rich.table import Table
@@ -30,7 +32,54 @@ if TYPE_CHECKING:
     from mnemo.modelo_nvidia import ClienteNVIDIA
 
 
-CompleterType = Union[WordCompleter, "PathCompleter"]
+class PathCompleter(Completer):
+    """Completer contextual: completa paths para comandos de nota, comandos gerais caso contrário."""
+
+    def __init__(self, vault_root: str, base_commands: List[str]) -> None:
+        self.vault_root = vault_root
+        self.base_commands = base_commands
+        from mnemo.permissoes import Permissoes
+        self.perms = Permissoes(vault_root)
+
+    def get_completions(self, document: Document, complete_event: CompleteEvent) -> Generator[Completion, None, None]:
+        text = document.text_before_cursor
+
+        # Comandos de nota que aceitam paths
+        for cmd in ["create_note", "read_note", "append_to_note", "list_files"]:
+            if text.startswith(cmd + " "):
+                prefix = text[len(cmd) + 1:]
+                yield from self._complete_path(prefix)
+                return
+
+        # Completer padrão: comandos + pastas raiz
+        for cmd in self.base_commands:
+            if cmd.startswith(text):
+                yield Completion(cmd, start_position=-len(text))
+        for p in self.perms.raizes_permitidas():
+            folder = str(p.relative_to(self.perms.notas)) + "/"
+            if folder.startswith(text):
+                yield Completion(folder, start_position=-len(text))
+
+    def _complete_path(self, prefix: str) -> Generator[Completion, None, None]:
+        """Completa caminhos relativos a notas/ dentro de pastas permitidas."""
+        base = self.perms.notas
+
+        # Se prefix tem "/", completa dentro da pasta
+        if "/" in prefix:
+            folder, partial = prefix.rsplit("/", 1)
+            folder_path = base / folder
+            if folder_path.exists() and folder_path.is_dir():
+                for f in folder_path.glob(f"{partial}*.md"):
+                    yield Completion(f"{folder}/{f.name}", start_position=-len(partial))
+        else:
+            # Senão, completa pastas permitidas
+            for p in self.perms.raizes_permitidas():
+                rel = str(p.relative_to(base)) + "/"
+                if rel.startswith(prefix):
+                    yield Completion(rel, start_position=-len(prefix))
+
+
+CompleterType = Union[WordCompleter, PathCompleter]
 
 
 class ChatUI:
@@ -41,8 +90,20 @@ class ChatUI:
         self.console = Console(theme=self._build_theme())
         self._base_commands: List[str] = []
         self._completer: Optional[CompleterType] = None
-        self.session: PromptSession[Any] = PromptSession()  # placeholder
-        self._setup_prompt_session()
+        self._session: Optional[PromptSession[Any]] = None
+        # NÃO chama _setup_prompt_session aqui - lazy init
+
+    @property
+    def session(self) -> PromptSession[Any]:
+        """Lazy initialization do PromptSession para evitar erro em testes sem console."""
+        if self._session is None:
+            self._setup_prompt_session()
+        return self._session
+
+    def _ensure_session(self) -> None:
+        """Garante que a sessão foi criada (para métodos que precisam dela)."""
+        if self._session is None:
+            self._setup_prompt_session()
 
     # ------------------------------------------------------------------ theme
     def _build_theme(self) -> Theme:
@@ -106,7 +167,7 @@ class ChatUI:
             # EOF - sair graciosamente
             event.app.exit(result=EOFError)
 
-        self.session = PromptSession(
+        self._session = PromptSession(
             history=FileHistory(str(Path.home() / ".mnemo" / "chat_history")),
             completer=completer,
             key_bindings=kb,
@@ -117,54 +178,7 @@ class ChatUI:
     def update_completer(self, vault_root: str) -> None:
         """Atualiza auto-complete com pastas permitidas do vault (com path completion)."""
         self._completer = PathCompleter(vault_root, self._base_commands)
-        self.session.completer = self._completer
-
-
-class PathCompleter(Completer):
-    """Completer contextual: completa paths para comandos de nota, comandos gerais caso contrário."""
-
-    def __init__(self, vault_root: str, base_commands: List[str]) -> None:
-        self.vault_root = vault_root
-        self.base_commands = base_commands
-        from mnemo.permissoes import Permissoes
-        self.perms = Permissoes(vault_root)
-
-    def get_completions(self, document, complete_event) -> Generator[Completion, None, None]:
-        text = document.text_before_cursor
-
-        # Comandos de nota que aceitam paths
-        for cmd in ["create_note", "read_note", "append_to_note", "list_files"]:
-            if text.startswith(cmd + " "):
-                prefix = text[len(cmd) + 1:]
-                yield from self._complete_path(prefix)
-                return
-
-        # Completer padrão: comandos + pastas raiz
-        for cmd in self.base_commands:
-            if cmd.startswith(text):
-                yield Completion(cmd, start_position=-len(text))
-        for p in self.perms.raizes_permitidas():
-            folder = str(p.relative_to(self.perms.notas)) + "/"
-            if folder.startswith(text):
-                yield Completion(folder, start_position=-len(text))
-
-    def _complete_path(self, prefix: str) -> Generator[Completion, None, None]:
-        """Completa caminhos relativos a notas/ dentro de pastas permitidas."""
-        base = self.perms.notas
-
-        # Se prefix tem "/", completa dentro da pasta
-        if "/" in prefix:
-            folder, partial = prefix.rsplit("/", 1)
-            folder_path = base / folder
-            if folder_path.exists() and folder_path.is_dir():
-                for f in folder_path.glob(f"{partial}*.md"):
-                    yield Completion(f"{folder}/{f.name}", start_position=-len(partial))
-        else:
-            # Senão, completa pastas permitidas
-            for p in self.perms.raizes_permitidas():
-                rel = str(p.relative_to(base)) + "/"
-                if rel.startswith(prefix):
-                    yield Completion(rel, start_position=-len(prefix))
+        self._session.completer = self._completer
 
     # ------------------------------------------------------------------ public API
     def welcome(self, vault: str, model: str) -> None:
@@ -407,7 +421,7 @@ class PathCompleter(Completer):
     def load_history_session(self, vault_root: str, session_id: str) -> List[Dict[str, Any]]:
         """
         Carrega uma sessão do histórico e retorna lista de mensagens.
-        session_id pode ser o nome do arquivo (ex: 2026-09-27_11-11.md) ou prefixo.
+        session_id pode ser o nome do arquivo (ex: 2026-09-27_11-11.md) ou prefixo (ex: 2026-09-27).
         """
         hist_dir = Path(vault_root) / "notas" / "historico"
         if not hist_dir.exists():
@@ -415,9 +429,19 @@ class PathCompleter(Completer):
             return []
 
         # Encontra arquivo
+        # Se não tem .md, adiciona
         if not session_id.endswith(".md"):
             session_id += ".md"
-        matches = list(hist_dir.glob(f"*{session_id}*"))
+        
+        # Se parece com prefixo de data (YYYY-MM-DD.md), busca por prefixo
+        if session_id.count("-") == 2 and session_id.endswith(".md"):
+            # Ex: "2026-09-27.md" -> busca "2026-09-27_*.md"
+            prefix = session_id[:-3]  # remove .md
+            matches = list(hist_dir.glob(f"{prefix}_*.md"))
+        else:
+            # Busca exata ou com wildcard
+            matches = list(hist_dir.glob(f"*{session_id}*"))
+        
         if not matches:
             self.print_error(f"Sessão '{session_id}' não encontrada.")
             return []
@@ -544,7 +568,7 @@ class PathCompleter(Completer):
 
         layout = Layout(Window(control, wrap_lines=False, style="class:list"))
 
-        app = Application(
+        app: Application[Any] = Application(
             layout=layout,
             key_bindings=kb,
             style=style,
