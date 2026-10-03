@@ -12,7 +12,7 @@ import os
 import time
 import urllib.error
 import urllib.request
-from typing import Any, Dict, Generator, List, Optional, Union
+from typing import Any, Dict, Generator, List, Optional, Union, IO
 
 URL_BASE = "https://integrate.api.nvidia.com/v1/chat/completions"
 MODELO_PADRAO = "nvidia/nemotron-3.5-lightning-30b-a3b"
@@ -83,11 +83,11 @@ class ClienteNVIDIA:
             if stream:
                 return self._iter_stream(resposta)
             dados = json.loads(resposta.read().decode("utf-8"))
-            return dados
+            return dados  # type: ignore[return-value]
 
-    def _iter_stream(self, resposta: urllib.request.urlopen) -> Generator[Dict[str, Any], None, None]:
+    def _iter_stream(self, resposta: IO[bytes]) -> Generator[Dict[str, Any], None, None]:
         """Itera sobre resposta de streaming (Server-Sent Events)."""
-        for linha in resposta:
+        for linha in resposta:  # type: ignore[union-attr]
             linha = linha.decode("utf-8").strip()
             if not linha or linha == "data: [DONE]":
                 continue
@@ -160,9 +160,9 @@ class ClienteNVIDIA:
 
                     # Sucesso!
                     if stream:
-                        return self._processar_stream(resultado)
+                        return self._processar_stream(resultado)  # type: ignore[arg-type]
                     else:
-                        return self._extrair_mensagem(resultado)
+                        return self._extrair_mensagem(resultado)  # type: ignore[arg-type]
 
                 except (urllib.error.HTTPError, urllib.error.URLError, TimeoutError) as e:
                     if not self._deve_tentar_novamente(e):

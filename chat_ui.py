@@ -6,7 +6,7 @@ import json
 from contextlib import contextmanager
 from datetime import datetime
 from pathlib import Path
-from typing import TYPE_CHECKING, List, Dict, Any, Generator, Optional, Union
+from typing import TYPE_CHECKING, List, Dict, Any, Generator, Optional, Union, Tuple
 
 from rich.console import Console
 from rich.live import Live
@@ -41,7 +41,7 @@ class ChatUI:
         self.console = Console(theme=self._build_theme())
         self._base_commands: List[str] = []
         self._completer: Optional[CompleterType] = None
-        self.session: PromptSession = PromptSession()  # placeholder
+        self.session: PromptSession[Any] = PromptSession()  # placeholder
         self._setup_prompt_session()
 
     # ------------------------------------------------------------------ theme
@@ -84,7 +84,7 @@ class ChatUI:
             "/limpar", "/config", "/ajuda", "/status", "sair", "exit", "quit"
         ]
         self._base_commands = base_commands
-        
+
         if vault_root:
             completer: CompleterType = PathCompleter(vault_root, base_commands)
         else:
@@ -93,16 +93,16 @@ class ChatUI:
         kb = KeyBindings()
 
         @kb.add("c-l")
-        def _(event):
+        def _clear(event) -> None:
             event.app.renderer.clear()
 
         @kb.add("c-c")
-        def _(event):
+        def _cancel(event) -> None:
             # cancela input atual, não sai do programa
             event.app.current_buffer.reset()
 
         @kb.add("c-d")
-        def _(event):
+        def _eof(event) -> None:
             # EOF - sair graciosamente
             event.app.exit(result=EOFError)
 
@@ -122,23 +122,23 @@ class ChatUI:
 
 class PathCompleter(Completer):
     """Completer contextual: completa paths para comandos de nota, comandos gerais caso contrário."""
-    
+
     def __init__(self, vault_root: str, base_commands: List[str]) -> None:
         self.vault_root = vault_root
         self.base_commands = base_commands
         from mnemo.permissoes import Permissoes
         self.perms = Permissoes(vault_root)
-    
+
     def get_completions(self, document, complete_event) -> Generator[Completion, None, None]:
         text = document.text_before_cursor
-        
+
         # Comandos de nota que aceitam paths
         for cmd in ["create_note", "read_note", "append_to_note", "list_files"]:
             if text.startswith(cmd + " "):
                 prefix = text[len(cmd) + 1:]
                 yield from self._complete_path(prefix)
                 return
-        
+
         # Completer padrão: comandos + pastas raiz
         for cmd in self.base_commands:
             if cmd.startswith(text):
@@ -147,11 +147,11 @@ class PathCompleter(Completer):
             folder = str(p.relative_to(self.perms.notas)) + "/"
             if folder.startswith(text):
                 yield Completion(folder, start_position=-len(text))
-    
+
     def _complete_path(self, prefix: str) -> Generator[Completion, None, None]:
         """Completa caminhos relativos a notas/ dentro de pastas permitidas."""
         base = self.perms.notas
-        
+
         # Se prefix tem "/", completa dentro da pasta
         if "/" in prefix:
             folder, partial = prefix.rsplit("/", 1)
@@ -182,11 +182,11 @@ class PathCompleter(Completer):
         )
 
     @contextmanager
-    def thinking(self):
+    def thinking(self) -> Generator[None, None, None]:
         with Status("[info]A pensar...[/info]", console=self.console, spinner="dots"):
             yield
 
-    def print_streaming(self, generator) -> str:
+    def print_streaming(self, generator: Generator[Dict[str, Any], None, None]) -> str:
         """Exibe resposta em streaming com Live e retorna texto completo.
         Simula efeito de streaming palavra-a-palavra (sem chamada extra à API)."""
         import time
@@ -217,11 +217,11 @@ class PathCompleter(Completer):
     def show_status(self, vault_root: str, cliente: "ClienteNVIDIA", config: Config) -> None:
         """Mostra painel com estado completo do sistema."""
         from mnemo.permissoes import Permissoes
-        
+
         perms = Permissoes(vault_root)
         pastas = [str(p.relative_to(perms.notas)) for p in perms.raizes_permitidas()]
-        
-        notas_por_pasta = {}
+
+        notas_por_pasta: Dict[str, int] = {}
         total = 0
         for p in pastas:
             pasta_path = perms.notas / p
@@ -231,14 +231,14 @@ class PathCompleter(Completer):
                 count = 0
             notas_por_pasta[p] = count
             total += count
-        
-        index_path = perms.vault / ".vault" / "index.db"
+
+        index_path = perms.raiz / ".vault" / "index.db"
         index_size = index_path.stat().st_size if index_path.exists() else 0
-        
+
         table = Table(show_header=False, box=None, padding=(0, 1))
         table.add_column("Key", style="info")
         table.add_column("Value")
-        table.add_row("Vault", f"{perms.vault.name} ({vault_root})")
+        table.add_row("Vault", f"{perms.raiz.name} ({vault_root})")
         table.add_row("Modelo", cliente.modelo)
         table.add_row("Tema", config.get("theme", "auto"))
         table.add_row("", "")
@@ -251,7 +251,7 @@ class PathCompleter(Completer):
         table.add_row("Timeout API", f"{config.get('timeout', 30)}s")
         fallbacks = config.get("fallback_models", [])
         table.add_row("Fallback", ", ".join(fallbacks) if fallbacks else "(nenhum)")
-        
+
         self.console.print(Panel(table, title="STATUS", border_style="info"))
 
     def print_panel(self, title: str, content: str) -> None:
@@ -291,11 +291,9 @@ class PathCompleter(Completer):
 
     def _filter_history_files(self, hist_dir: Path, since: Optional[str] = None, until: Optional[str] = None, model: Optional[str] = None) -> List[Path]:
         """Filtra arquivos de histórico por data e modelo."""
-        from datetime import datetime
-        
         # Parse datas
-        since_dt = None
-        until_dt = None
+        since_dt: Optional[datetime] = None
+        until_dt: Optional[datetime] = None
         if since:
             try:
                 since_dt = datetime.strptime(since, "%Y-%m-%d")
@@ -312,8 +310,8 @@ class PathCompleter(Completer):
                 return []
 
         files = sorted(hist_dir.glob("*.md"), reverse=True)
-        filtered = []
-        
+        filtered: List[Path] = []
+
         for f in files:
             # Extrai data do nome do arquivo (formato: YYYY-MM-DD_HH-MM.md)
             try:
@@ -322,13 +320,13 @@ class PathCompleter(Completer):
             except (ValueError, IndexError):
                 # Se não conseguir parsear a data, usa mtime
                 file_dt = datetime.fromtimestamp(f.stat().st_mtime)
-            
+
             # Filtro por data
             if since_dt and file_dt < since_dt:
                 continue
             if until_dt and file_dt > until_dt:
                 continue
-            
+
             # Filtro por modelo (busca no conteúdo)
             if model:
                 try:
@@ -337,9 +335,9 @@ class PathCompleter(Completer):
                         continue
                 except Exception:
                     continue
-            
+
             filtered.append(f)
-        
+
         return filtered
 
     def show_config(self) -> None:
@@ -381,7 +379,7 @@ class PathCompleter(Completer):
             return
 
         termo_lower = termo.lower()
-        resultados = []
+        resultados: List[Tuple[str, str]] = []
         for f in files:
             try:
                 txt = f.read_text(encoding="utf-8")
@@ -437,9 +435,9 @@ class PathCompleter(Completer):
             return []
 
         # Parse do formato markdown do histórico
-        mensagens = []
-        current_role = None
-        current_content = []
+        mensagens: List[Dict[str, Any]] = []
+        current_role: Optional[str] = None
+        current_content: List[str] = []
 
         for line in txt.split("\n"):
             if line.startswith("## "):
@@ -488,7 +486,7 @@ class PathCompleter(Completer):
             return None
 
         # Prepara dados para a lista
-        items = []
+        items: List[Tuple[str, str]] = []
         for f in files:
             try:
                 txt = f.read_text(encoding="utf-8")
@@ -501,11 +499,11 @@ class PathCompleter(Completer):
             items.append((f.name, preview))
 
         selected_index = [0]  # mutable para closure
-        result = [None]  # para capturar resultado
+        result: List[Optional[str]] = [None]  # para capturar resultado
 
-        def get_formatted_text():
+        def get_formatted_text() -> List[Tuple[str, str]]:
             """Gera texto formatado para a lista."""
-            result_text = []
+            result_text: List[Tuple[str, str]] = []
             for i, (nome, preview) in enumerate(items):
                 if i == selected_index[0]:
                     result_text.append(("reverse", f"▶ {nome} — {preview}\n"))
@@ -518,24 +516,24 @@ class PathCompleter(Completer):
         kb = KeyBindings()
 
         @kb.add("up")
-        def _(event):
+        def _up(event) -> None:
             if selected_index[0] > 0:
                 selected_index[0] -= 1
 
         @kb.add("down")
-        def _(event):
+        def _down(event) -> None:
             if selected_index[0] < len(items) - 1:
                 selected_index[0] += 1
 
         @kb.add("enter")
-        def _(event):
+        def _enter(event) -> None:
             result[0] = items[selected_index[0]][0]
             event.app.exit()
 
         @kb.add("c-c")
         @kb.add("q")
         @kb.add("escape")
-        def _(event):
+        def _quit(event) -> None:
             result[0] = None
             event.app.exit()
 
@@ -563,13 +561,10 @@ class PathCompleter(Completer):
         return result[0]
 
     # ------------------------------------------------------------------ histórico export/import
-    def export_history(self, vault_root: str, output_file: str, since: str = None, until: str = None, model: str = None) -> None:
+    def export_history(self, vault_root: str, output_file: str, since: Optional[str] = None, until: Optional[str] = None, model: Optional[str] = None) -> None:
         """
         Exporta histórico para JSON.
         """
-        import json
-        from datetime import datetime
-        
         hist_dir = Path(vault_root) / "notas" / "historico"
         if not hist_dir.exists():
             self.print_error("Diretório de histórico não existe.")
@@ -580,7 +575,7 @@ class PathCompleter(Completer):
             self.console.print("[muted]Nenhum histórico com esses filtros.[/muted]")
             return
 
-        export_data = {
+        export_data: Dict[str, Any] = {
             "exported_at": datetime.now().isoformat(),
             "vault_root": vault_root,
             "filters": {"since": since, "until": until, "model": model},
@@ -596,11 +591,11 @@ class PathCompleter(Completer):
                     if line.startswith("**Modelo:**"):
                         modelo = line.replace("**Modelo:**", "").strip()
                         break
-                
+
                 # Parse mensagens
-                mensagens = []
-                current_role = None
-                current_content = []
+                mensagens: List[Dict[str, Any]] = []
+                current_role: Optional[str] = None
+                current_content: List[str] = []
 
                 for line in txt.split("\n"):
                     if line.startswith("## "):
@@ -648,8 +643,6 @@ class PathCompleter(Completer):
         Importa histórico de JSON.
         Retorna número de sessões importadas.
         """
-        import json
-        
         input_path = Path(input_file)
         if not input_path.exists():
             self.print_error(f"Arquivo não encontrado: {input_file}")
@@ -673,7 +666,7 @@ class PathCompleter(Completer):
             filename = session.get("filename", "")
             if not filename:
                 continue
-            
+
             # Verifica se já existe
             target = hist_dir / filename
             if target.exists():
@@ -684,7 +677,7 @@ class PathCompleter(Completer):
             lines = [f"# Conversa {filename.replace('.md', '')}\n"]
             if session.get("model"):
                 lines.append(f"**Modelo:** {session['model']}\n")
-            
+
             for msg in session.get("messages", []):
                 role = msg.get("role", "user")
                 content = msg.get("content", "")
@@ -696,7 +689,7 @@ class PathCompleter(Completer):
                     role_label = "🔧 Tool"
                 else:
                     role_label = "🧑 Tu"
-                
+
                 if content.strip():
                     lines.append(f"## {role_label}\n{content}\n")
 
