@@ -171,6 +171,10 @@ def main() -> None:
     if args.save_config:
         config.save()
 
+    # UI (criada antes da validação para poder mostrar erros)
+    config.set("theme", config.get("theme", "auto"))  # garante theme
+    ui = ChatUI(config)
+
     vault_path = config.get("vault_default", "vault-teste")
 
     # Validação de configuração no startup
@@ -180,10 +184,6 @@ def main() -> None:
         for e in errors:
             ui.console.print(f"  - {e}")
         sys.exit(1)
-
-    # UI
-    config.set("theme", config.get("theme", "auto"))  # garante theme
-    ui = ChatUI(config)
 
     # Health check rápido
     # Só passa modelo se foi explicitamente fornecido via --modelo; caso contrário,

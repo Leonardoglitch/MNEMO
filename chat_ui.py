@@ -177,6 +177,7 @@ class ChatUI:
 
     def update_completer(self, vault_root: str) -> None:
         """Atualiza auto-complete com pastas permitidas do vault (com path completion)."""
+        self._ensure_session()
         self._completer = PathCompleter(vault_root, self._base_commands)
         self._session.completer = self._completer
 
