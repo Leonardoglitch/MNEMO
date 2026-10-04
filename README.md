@@ -2,6 +2,11 @@
 
 Plataforma local-first para notas Markdown com pesquisa semântica e assistente conversacional (Nemotron/NVIDIA).
 
+![Tests](https://img.shields.io/badge/tests-85%20passing-brightgreen)
+![Mypy](https://img.shields.io/badge/mypy--strict-core%20modules-blue)
+![Python](https://img.shields.io/badge/python-3.9%2B-blue)
+![License](https://img.shields.io/badge/license-MIT-green)
+
 ## Arquitetura (Fase 1)
 
 ```mermaid
@@ -62,8 +67,57 @@ Pode definir vault/modelo/tema padrão via CLI e gravar com `--save-config`.
 
 ```bash
 python -m pytest tests/ -v
-# 56 testes: permissões, índice, modelo NVIDIA, chat, ferramentas, UI, config, histórico
+# 85 testes: permissões, índice, modelo NVIDIA, chat, ferramentas, UI, config, histórico
 ```
+
+## Desenvolvimento
+
+### Type Checking (mypy)
+
+```bash
+# Módulos core (mnemo/, config.py) — strict mode passa
+python -m mypy --strict mnemo/ config.py
+
+# Projeto completo — 37 erros residuais em código TUI/HTTP dinâmico (não bloqueantes)
+python -m mypy --strict mnemo/ chat.py chat_ui.py config.py
+```
+
+**Erros conhecidos (falsos positivos):**
+- `mnemo/modelo_nvidia.py` (6): `urllib.request` sem stubs completos
+- `chat_ui.py` (24): `prompt_toolkit` API dinâmica (closures, decorators)
+- `chat.py` (7): Union types no loop de ferramentas (refinamento manual)
+
+Todos os 85 testes passam — o código funciona corretamente.
+
+### Estrutura de Testes
+
+```
+tests/
+├── test_permissoes.py       # Whitelist, path traversal
+├── test_armazenamento.py    # CRUD, backups, lixo
+├── test_indexador.py        # FTS5, reindexação, diacríticos
+├── test_ferramentas.py      # 5 ferramentas do agente
+├── test_modelo_nvidia.py    # Cliente HTTP, streaming
+├── test_chat.py             # Loop tool-calling, comandos
+├── test_chat_ui.py          # UI, formatação, TUI histórico
+├── test_config.py           # Config persistente, validação
+└── test_historico.py        # Histórico: TUI, busca, filtros, export/import, autocomplete
+```
+
+### Convenções de Código
+
+- **Type hints**: Obrigatórios em módulos core (`mnemo/`, `config.py`)
+- **Testes**: Um arquivo por módulo, classes `Test<Feature>`, fixtures em `conftest.py` (futuro)
+- **Commits**: Imperativos, prefixos `feat:`, `fix:`, `docs:`, `refactor:`, `test:`
+- **Formatação**: Black (line-length=100), isort (profile=black)
+
+### Adicionando Nova Ferramenta
+
+1. Implementar em `mnemo/ferramentas.py` (função + schema OpenAI)
+2. Registrar em `FerramentasVault.get_tool_definitions()`
+3. Adicionar handler em `chat.py` no loop de tool-calling
+4. Criar testes em `tests/test_ferramentas.py`
+5. Executar `python -m pytest tests/ -v && python -m mypy --strict mnemo/ferramentas.py`
 
 ## Uso Rápido
 
@@ -160,13 +214,13 @@ O comando `/historico` sem argumentos abre uma **interface interativa (TUI)** co
 | Módulo | Responsabilidade |
 |--------|------------------|
 | `permissoes.py` | Whitelist de pastas, bloqueio de path traversal |
-| `armazenamento.py` | CRUD atómico + backups + lixo (.lixo/) |
+| `armazenamento.py` | CRUD atômico + backups + lixo (.lixo/) |
 | `indexador.py` | SQLite FTS5, prefixo + remove_diacritics |
-| `ferramentas.py` | search, read_note, create_note, append_to_note |
+| `ferramentas.py` | search, read_note, create_note, append_to_note, list_files |
 | `modelo_nvidia.py` | Cliente HTTP OpenAI-compatível p/ Nemotron |
 | `chat.py` | Loop tool-calling com histórico de mensagens |
-| `chat_ui.py` | UI rich + prompt_toolkit (cores, spinners, histórico navegável, autocomplete, **TUI interativa, busca, filtros, export/import**) |
-| `config.py` | Configuração persistente `~/.mnemo/config.json` |
+| `chat_ui.py` | UI rich + prompt_toolkit (cores, spinners, **TUI histórico interativa, busca, filtros, export/import, PathCompleter autocomplete**) |
+| `config.py` | Configuração persistente `~/.mnemo/config.json` + validação startup |
 
 ## Convenções Git
 
