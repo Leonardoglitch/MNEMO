@@ -63,6 +63,92 @@ cp .env.example .env
 A configuração persistente fica em `~/.mnemo/config.json` (criado automaticamente).
 Pode definir vault/modelo/tema padrão via CLI e gravar com `--save-config`.
 
+## Inicializando um Vault
+
+### Opção 1: Vault de Demonstração (rápido)
+```bash
+# Usa o vault-teste/ já incluído no repo
+python chat.py --vault vault-teste
+```
+
+### Opção 2: Criar Vault Novo (recomendado)
+```bash
+# 1. Cria estrutura completa em ~/meu-vault
+python -c "
+from mnemo import Permissoes, Armazenamento, Indexador
+from pathlib import Path
+
+vault = Path('~/meu-vault').expanduser()
+vault.mkdir(parents=True, exist_ok=True)
+
+# Configuração do vault
+config = {
+    'versao': 1,
+    'todas_as_pastas': False,
+    'pastas_permitidas': ['projetos', 'estudo', 'pessoal', 'historico']
+}
+(vault / '.vault').mkdir(exist_ok=True)
+(vault / '.vault' / 'config.json').write_text(
+    __import__('json').dumps(config, indent=2), encoding='utf-8'
+)
+
+# Cria pastas de notas
+for pasta in config['pastas_permitidas']:
+    (vault / 'notas' / pasta).mkdir(parents=True, exist_ok=True)
+
+# Inicializa índice
+perms = Permissoes(str(vault))
+idx = Indexador(perms)
+print('Indexados:', idx.reindexar_tudo(), 'arquivos')
+print('Vault criado em:', vault)
+"
+
+# 2. Inicia o chat
+python chat.py --vault ~/meu-vault
+```
+
+### Opção 3: Vault Mínimo (manual)
+```bash
+mkdir -p ~/meu-vault/notas/projetos
+mkdir -p ~/meu-vault/.vault
+
+cat > ~/meu-vault/.vault/config.json << 'EOF'
+{
+  "versao": 1,
+  "todas_as_pastas": false,
+  "pastas_permitidas": ["projetos", "historico"]
+}
+EOF
+
+python chat.py --vault ~/meu-vault
+```
+
+### Estrutura Criada
+```
+meu-vault/
+├── .vault/
+│   ├── config.json          # config do vault (pastas permitidas)
+│   └── index.db             # SQLite FTS5 (criado ao indexar)
+├── notas/
+│   ├── projetos/            # pasta permitida
+│   ├── estudo/              # pasta permitida
+│   ├── pessoal/             # pasta permitida
+│   └── historico/           # pasta permitida (checkpoints /salvar)
+└── .backups/                # backups automáticos (criado ao escrever)
+    └── projetos/
+└── .lixo/                   # lixeira (criado ao apagar)
+    └── projetos/
+```
+
+### Salvando Configuração como Padrão
+```bash
+# Após criar o vault, define como padrão
+python chat.py --vault ~/meu-vault --save-config
+
+# Da próxima vez, basta:
+python chat.py
+```
+
 ## Testes
 
 ```bash
