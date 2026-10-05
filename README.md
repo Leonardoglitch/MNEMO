@@ -243,6 +243,7 @@ python chat.py
 | `/config theme dark|light|auto` | Altera tema de cores (persiste) |
 | `/ajuda` / `/help` | Lista comandos |
 | `sair` / `exit` / `quit` | Termina a conversa (auto-save) |
+| `Ctrl+C` | Pergunta confirmação (S/n); 2× Ctrl+C = saída forçada sem salvar |
 
 ### Modelos disponíveis na NVIDIA
 
@@ -258,6 +259,19 @@ python chat.py
 - `light` — fundo claro
 
 Definir via CLI: `python chat.py --theme dark` ou no REPL: `/config theme dark`.
+
+### Saída com Ctrl+C (SIGINT/SIGTERM)
+
+O chat trata sinais de interrupção de forma segura:
+
+| Ação | Comportamento |
+|------|---------------|
+| **Ctrl+C** (1ª vez) | Pergunta: `Sair e gravar histórico? (S/n)` — Enter/S = salva e sai; `n` = continua |
+| **Ctrl+C** (2ª vez rápida) | Saída forçada imediata — **histórico NÃO gravado** |
+| `kill <pid>` (SIGTERM) | Mesmo comportamento do 1º Ctrl+C |
+| Durante chamada de ferramenta | Termina a ferramenta atual e pergunta confirmação no próximo ciclo |
+
+> **Dica:** Use `sair` / `exit` / `quit` para saída normal com auto-save garantido.
 
 ### Histórico Navegável (TUI)
 
