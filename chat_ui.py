@@ -229,6 +229,14 @@ class ChatUI:
     def print_error(self, msg: str) -> None:
         self.console.print(f"[error]Erro:[/error] {msg}")
 
+    def confirm(self, msg: str, default: bool = True) -> bool:
+        """Prompt de confirmação sim/não (usa prompt_toolkit)."""
+        from prompt_toolkit.shortcuts import confirm as pt_confirm
+        try:
+            return pt_confirm(msg, default=default)
+        except (EOFError, KeyboardInterrupt):
+            return default
+
     def show_status(self, vault_root: str, cliente: "ClienteNVIDIA", config: Config) -> None:
         """Mostra painel com estado completo do sistema."""
         from mnemo.permissoes import Permissoes

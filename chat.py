@@ -15,6 +15,7 @@ import argparse
 import ast
 import json
 import os
+import signal
 import sys
 import time
 from typing import List, Dict, Any
@@ -67,12 +68,19 @@ def carregar_env(caminho: str = ".env") -> None:
 
 
 def executar_ciclo_ferramentas(
-    cliente: ClienteNVIDIA, vault: FerramentasVault, mensagens: List[Dict[str, Any]]
+    cliente: ClienteNVIDIA, vault: FerramentasVault, mensagens: List[Dict[str, Any]], shutdown_check: callable = None
 ) -> str:
     """Envia mensagens ao modelo e executa as ferramentas que ele pedir."""
     for _ in range(MAX_CICLOS_FERRAMENTAS):
+        # Verifica shutdown (Ctrl+C) antes de cada chamada ao modelo
+        if shutdown_check and shutdown_check():
+            raise KeyboardInterrupt("Shutdown requested")
+        
         # Para chamadas de ferramentas, não usar streaming (precisamos do JSON completo)
-        resposta = cliente.conversar(mensagens, ferramentas=FerramentasVault.DESCRICOES, stream=False)
+        try:
+            resposta = cliente.conversar(mensagens, ferramentas=FerramentasVault.DESCRICOES, stream=False)
+        except KeyboardInterrupt:
+            raise
         mensagens.append(resposta)
 
         pedidos = resposta.get("tool_calls")
@@ -81,6 +89,10 @@ def executar_ciclo_ferramentas(
             return resposta.get("content") or ""
 
         for pedido in pedidos:
+            # Verifica shutdown durante execução de ferramentas
+            if shutdown_check and shutdown_check():
+                raise KeyboardInterrupt("Shutdown requested")
+                
             nome = pedido["function"]["name"]
             args_str = pedido["function"]["arguments"] or "{}"
             try:
@@ -195,6 +207,22 @@ def main() -> None:
         print(f"Erro ao inicializar modelo: {e}", file=sys.stderr)
         sys.exit(1)
 
+    # Flag para controlo de saída (Ctrl+C duplo força saída)
+    shutdown_requested = False
+
+    def _signal_handler(sig, frame):
+        nonlocal shutdown_requested
+        if shutdown_requested:
+            ui.console.print("\n[error]Saída forçada — histórico NÃO gravado[/error]")
+            sys.exit(1)
+        shutdown_requested = True
+        # O loop principal vai detectar a flag
+
+    # Registra handlers (SIGINT=Ctrl+C, SIGTERM=kill)
+    signal.signal(signal.SIGINT, _signal_handler)
+    if hasattr(signal, "SIGTERM"):
+        signal.signal(signal.SIGTERM, _signal_handler)
+
     # Inicializa vault e UI
     with FerramentasVault(vault_path) as vault:
         # atualiza completer com pastas permitidas (path completion)
@@ -219,11 +247,34 @@ def main() -> None:
         ui.welcome(vault.armazenamento.perms.raiz.name, cliente.modelo)
 
         while True:
+            # Verifica se foi pedido shutdown (signal handler)
+            if shutdown_requested:
+                if ui.confirm("\nSair e gravar histórico?"):
+                    ui.console.print("\n[Saindo... a gravar histórico]")
+                    _salvar_historico(mensagens, vault_path, cliente.modelo)
+                else:
+                    ui.console.print("[info]Continuando...[/info]")
+                    shutdown_requested = False
+                break
+
             try:
                 texto = ui.prompt("Tu: ")
             except (EOFError, KeyboardInterrupt):
-                ui.console.print("\n[Saindo... a gravar histórico]")
-                _salvar_historico(mensagens, vault_path, cliente.modelo)
+                if shutdown_requested:
+                    # 2º Ctrl+C durante prompt -> força saída
+                    ui.console.print("\n[error]Saída forçada — histórico NÃO gravado[/error]")
+                    sys.exit(1)
+                shutdown_requested = True
+                # O loop vai tratar na próxima iteração
+                continue
+
+            if shutdown_requested:
+                if ui.confirm("\nSair e gravar histórico?"):
+                    ui.console.print("\n[Saindo... a gravar histórico]")
+                    _salvar_historico(mensagens, vault_path, cliente.modelo)
+                else:
+                    ui.console.print("[info]Continuando...[/info]")
+                    shutdown_requested = False
                 break
 
             if not texto:
@@ -340,7 +391,8 @@ def main() -> None:
                     "OUTROS\n"
                     "  /salvar              # Checkpoint em historico/\n"
                     "  /limpar              # Limpa ecrã\n"
-                    "  sair / exit / quit   # Sai (auto-save)",
+                    "  sair / exit / quit   # Sai (auto-save)\n"
+                    "  Ctrl+C               # Pergunta confirmação (2x = força saída)",
                     title="Ajuda", border_style="info"))
                 continue
 
@@ -417,13 +469,24 @@ def main() -> None:
             mensagens.append({"role": "user", "content": texto})
             try:
                 with ui.thinking():
-                    resposta_texto = executar_ciclo_ferramentas(cliente, vault, mensagens)
+                    resposta_texto = executar_ciclo_ferramentas(
+                        cliente, vault, mensagens, 
+                        shutdown_check=lambda: shutdown_requested
+                    )
                 if resposta_texto.startswith("(demasiados pedidos"):
                     ui.print_error(resposta_texto)
                     mensagens.pop()
                     continue
                 ui.print_response(resposta_texto)
                 mensagens.append({"role": "assistant", "content": resposta_texto})
+            except KeyboardInterrupt:
+                # Ctrl+C durante tool calling
+                if shutdown_requested:
+                    ui.console.print("\n[error]Saída forçada — histórico NÃO gravado[/error]")
+                    sys.exit(1)
+                shutdown_requested = True
+                # O loop principal vai tratar na próxima iteração
+                continue
             except ErroModeloNVIDIA as e:
                 ui.print_error(str(e))
                 mensagens.pop()

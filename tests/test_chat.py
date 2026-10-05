@@ -52,7 +52,7 @@ def test_resposta_direta_sem_ferramentas(vault):
     cliente = ClienteFalso([{"role": "assistant", "content": "Olá!"}])
     mensagens = [{"role": "user", "content": "oi"}]
 
-    resposta = chat.executar_ciclo_ferramentas(cliente, vault, mensagens)
+    resposta = chat.executar_ciclo_ferramentas(cliente, vault, mensagens, shutdown_check=lambda: False)
 
     assert resposta == "Olá!"
     assert cliente.chamadas == 1
@@ -68,7 +68,7 @@ def test_uma_chamada_de_ferramenta_ate_resposta_final(vault):
     )
     mensagens = [{"role": "user", "content": "procura orçamento"}]
 
-    resposta = chat.executar_ciclo_ferramentas(cliente, vault, mensagens)
+    resposta = chat.executar_ciclo_ferramentas(cliente, vault, mensagens, shutdown_check=lambda: False)
 
     assert resposta == "Encontrei a nota do orçamento."
     assert cliente.chamadas == 2
@@ -88,7 +88,7 @@ def test_ferramenta_bloqueada_devolve_erro_ao_modelo_sem_rebentar(vault):
     )
     mensagens = [{"role": "user", "content": "lê a nota privada"}]
 
-    resposta = chat.executar_ciclo_ferramentas(cliente, vault, mensagens)
+    resposta = chat.executar_ciclo_ferramentas(cliente, vault, mensagens, shutdown_check=lambda: False)
 
     assert resposta == "Não tenho acesso a essa nota."
     resultado = json.loads(mensagens[-2]["content"])
@@ -104,7 +104,7 @@ def test_argumentos_invalidos_nao_rebentam_o_ciclo(vault):
     cliente = ClienteFalso([pedido_invalido, {"role": "assistant", "content": "ok"}])
     mensagens = [{"role": "user", "content": "..."}]
 
-    resposta = chat.executar_ciclo_ferramentas(cliente, vault, mensagens)
+    resposta = chat.executar_ciclo_ferramentas(cliente, vault, mensagens, shutdown_check=lambda: False)
 
     assert resposta == "ok"
     resultado = json.loads(mensagens[-2]["content"])
@@ -116,7 +116,7 @@ def test_limite_de_ciclos_evita_loop_infinito(vault):
     cliente = ClienteFalso([pedido_repetido] * chat.MAX_CICLOS_FERRAMENTAS)
     mensagens = [{"role": "user", "content": "..."}]
 
-    resposta = chat.executar_ciclo_ferramentas(cliente, vault, mensagens)
+    resposta = chat.executar_ciclo_ferramentas(cliente, vault, mensagens, shutdown_check=lambda: False)
 
     assert cliente.chamadas == chat.MAX_CICLOS_FERRAMENTAS
     assert "ciclo" in resposta
