@@ -247,15 +247,16 @@ def main() -> None:
         ui.welcome(vault.armazenamento.perms.raiz.name, cliente.modelo)
 
         while True:
-            # Verifica se foi pedido shutdown (signal handler)
+            # Verifica se foi pedido shutdown (signal handler ou except)
             if shutdown_requested:
                 if ui.confirm("\nSair e gravar histórico?"):
                     ui.console.print("\n[Saindo... a gravar histórico]")
                     _salvar_historico(mensagens, vault_path, cliente.modelo)
+                    break
                 else:
                     ui.console.print("[info]Continuando...[/info]")
                     shutdown_requested = False
-                break
+                    continue
 
             try:
                 texto = ui.prompt("Tu: ")
@@ -265,17 +266,7 @@ def main() -> None:
                     ui.console.print("\n[error]Saída forçada — histórico NÃO gravado[/error]")
                     sys.exit(1)
                 shutdown_requested = True
-                # O loop vai tratar na próxima iteração
                 continue
-
-            if shutdown_requested:
-                if ui.confirm("\nSair e gravar histórico?"):
-                    ui.console.print("\n[Saindo... a gravar histórico]")
-                    _salvar_historico(mensagens, vault_path, cliente.modelo)
-                else:
-                    ui.console.print("[info]Continuando...[/info]")
-                    shutdown_requested = False
-                break
 
             if not texto:
                 continue
