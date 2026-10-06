@@ -12,7 +12,7 @@ import os
 import time
 import urllib.error
 import urllib.request
-from typing import Any, Dict, Generator, List, Optional, Union, IO
+from typing import Any, Dict, Generator, List, Optional, Tuple, Union, IO
 
 URL_BASE = "https://integrate.api.nvidia.com/v1/chat/completions"
 MODELO_PADRAO = "nvidia/nemotron-3.5-lightning-30b-a3b"
@@ -97,9 +97,11 @@ class ClienteNVIDIA:
                 except json.JSONDecodeError:
                     continue
 
-    def _extrair_mensagem(self, dados: Dict[str, Any]) -> Dict[str, Any]:
+    def _extrair_mensagem(self, dados: Dict[str, Any]) -> tuple[Dict[str, Any], Dict[str, int]]:
         try:
-            return dados["choices"][0]["message"]
+            mensagem = dados["choices"][0]["message"]
+            usage = dados.get("usage", {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0})
+            return mensagem, usage
         except (KeyError, IndexError) as e:
             raise ErroModeloNVIDIA(f"Resposta inesperada da API: {dados}") from e
 
@@ -123,11 +125,11 @@ class ClienteNVIDIA:
         max_tokens: int = 2048,
         temperatura: float = 0.7,
         stream: bool = False,
-    ) -> Union[Dict[str, Any], Generator[Dict[str, Any], None, None]]:
+    ) -> Union[tuple[Dict[str, Any], Dict[str, int]], Generator[Dict[str, Any], None, None]]:
         """
         Envia o histórico de mensagens ao modelo.
         Se stream=True, retorna generator de chunks (dicts com 'delta').
-        Caso contrário, retorna a mensagem completa (dict com role, content, tool_calls).
+        Caso contrário, retorna tupla (mensagem_completa, usage_dict).
         """
         modelos_tentados = set()
         modelo_atual = self.modelo
@@ -160,9 +162,9 @@ class ClienteNVIDIA:
 
                     # Sucesso!
                     if stream:
-                        return self._processar_stream(resultado)  # type: ignore[arg-type]
+                        return self._processar_stream(resultado)  # type: ignore[return-value]
                     else:
-                        return self._extrair_mensagem(resultado)  # type: ignore[arg-type]
+                        return self._extrair_mensagem(resultado)  # type: ignore[return-value]
 
                 except (urllib.error.HTTPError, urllib.error.URLError, TimeoutError) as e:
                     if not self._deve_tentar_novamente(e):

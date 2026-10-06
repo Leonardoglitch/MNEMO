@@ -21,7 +21,6 @@ env/
 **/.vault/index.db
 .backups/
 .lixo/
-
 # OS
 .DS_Store
 Thumbs.db

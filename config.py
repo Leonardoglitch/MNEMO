@@ -23,6 +23,7 @@ DEFAULTS: Dict[str, Any] = {
         "nvidia/nemotron-3-ultra",
     ],
     "health_check_timeout": 5,
+    "show_tokens": False,                # mostrar contador de tokens
 }
 
 

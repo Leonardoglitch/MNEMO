@@ -229,6 +229,10 @@ class ChatUI:
     def print_error(self, msg: str) -> None:
         self.console.print(f"[error]Erro:[/error] {msg}")
 
+    def print_token_usage(self, turn_summary: str, session_summary: str) -> None:
+        """Exibe contagem de tokens do turno e da sessão."""
+        self.console.print(f"[dim]{turn_summary} | {session_summary}[/dim]")
+
     def confirm(self, msg: str, default: bool = True) -> bool:
         """Prompt de confirmação sim/não (usa prompt_toolkit)."""
         from prompt_toolkit.shortcuts import confirm as pt_confirm

@@ -3,6 +3,7 @@ from .armazenamento import Armazenamento
 from .indexador import Indexador
 from .ferramentas import FerramentasVault
 from .modelo_nvidia import ClienteNVIDIA, ErroModeloNVIDIA
+from .tokens import TokenCounter
 
 __all__ = [
     "Permissoes",
@@ -12,4 +13,5 @@ __all__ = [
     "FerramentasVault",
     "ClienteNVIDIA",
     "ErroModeloNVIDIA",
+    "TokenCounter",
 ]

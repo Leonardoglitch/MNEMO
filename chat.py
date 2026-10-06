@@ -20,7 +20,7 @@ import sys
 import time
 from typing import List, Dict, Any
 
-from mnemo import FerramentasVault
+from mnemo import FerramentasVault, TokenCounter
 from mnemo.modelo_nvidia import ClienteNVIDIA, ErroModeloNVIDIA
 
 from config import Config, DEFAULTS
@@ -68,9 +68,16 @@ def carregar_env(caminho: str = ".env") -> None:
 
 
 def executar_ciclo_ferramentas(
-    cliente: ClienteNVIDIA, vault: FerramentasVault, mensagens: List[Dict[str, Any]], shutdown_check: callable = None
-) -> str:
-    """Envia mensagens ao modelo e executa as ferramentas que ele pedir."""
+    cliente: ClienteNVIDIA, vault: FerramentasVault, mensagens: List[Dict[str, Any]], 
+    shutdown_check: callable = None, token_counter: "TokenCounter" = None
+) -> tuple[str, Dict[str, int]]:
+    """Envia mensagens ao modelo e executa as ferramentas que ele pedir.
+    
+    Returns:
+        tuple: (resposta_texto, usage_acumulado)
+    """
+    usage_acumulado: Dict[str, int] = {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}
+    
     for _ in range(MAX_CICLOS_FERRAMENTAS):
         # Verifica shutdown (Ctrl+C) antes de cada chamada ao modelo
         if shutdown_check and shutdown_check():
@@ -78,21 +85,32 @@ def executar_ciclo_ferramentas(
         
         # Para chamadas de ferramentas, não usar streaming (precisamos do JSON completo)
         try:
-            resposta = cliente.conversar(mensagens, ferramentas=FerramentasVault.DESCRICOES, stream=False)
+            resposta_tuple = cliente.conversar(mensagens, ferramentas=FerramentasVault.DESCRICOES, stream=False)
         except KeyboardInterrupt:
             raise
+        
+        # resposta_tuple é (mensagem, usage)
+        resposta, usage = resposta_tuple
         mensagens.append(resposta)
-
+        
+        # Acumula usage
+        for k in usage_acumulado:
+            usage_acumulado[k] += usage.get(k, 0)
+        
+        # Atualiza token_counter se fornecido
+        if token_counter:
+            token_counter.add(usage)
+        
         pedidos = resposta.get("tool_calls")
         if not pedidos:
             # Resposta final sem tool calls
-            return resposta.get("content") or ""
+            return resposta.get("content") or "", usage_acumulado
 
         for pedido in pedidos:
             # Verifica shutdown durante execução de ferramentas
             if shutdown_check and shutdown_check():
                 raise KeyboardInterrupt("Shutdown requested")
-                
+            
             nome = pedido["function"]["name"]
             args_str = pedido["function"]["arguments"] or "{}"
             try:
@@ -123,7 +141,7 @@ def executar_ciclo_ferramentas(
                     "content": json.dumps(resultado, ensure_ascii=False),
                 }
             )
-    return "(demasiados pedidos de ferramentas seguidos — parei para não entrar em ciclo)"
+    return "(demasiados pedidos de ferramentas seguidos — parei para não entrar em ciclo)", usage_acumulado
 
 
 def _salvar_historico(mensagens: List[Dict[str, Any]], raiz_vault: str, modelo: str = "") -> None:
@@ -244,6 +262,10 @@ def main() -> None:
             sys.exit(1)
 
         mensagens = [{"role": "system", "content": INSTRUCAO_SISTEMA}]
+        
+        # Contador de tokens (reset a cada conversa)
+        token_counter = TokenCounter()
+        
         ui.welcome(vault.armazenamento.perms.raiz.name, cliente.modelo)
 
         while True:
@@ -427,12 +449,21 @@ def main() -> None:
                 elif parts[1] == "fallback" and len(parts) >= 3:
                     models = [m.strip() for m in " ".join(parts[2:]).split(",")]
                     ui.set_config("fallback_models", models)
+                elif parts[1] == "tokens" and len(parts) == 3:
+                    if parts[2].lower() in ("on", "true", "1", "yes"):
+                        ui.set_config("show_tokens", True)
+                        ui.console.print("[success]Contador de tokens ativado.[/success]")
+                    elif parts[2].lower() in ("off", "false", "0", "no"):
+                        ui.set_config("show_tokens", False)
+                        ui.console.print("[success]Contador de tokens desativado.[/success]")
+                    else:
+                        ui.print_error("Uso: /config tokens on|off")
                 elif parts[1] == "reset":
                     ui.config.data = {**DEFAULTS}
                     ui.config.save()
                     ui.console.print("[success]Config resetado para padrões.[/success]")
                 else:
-                    ui.console.print("[warning]Uso:[/warning] /config  |  /config theme dark|light|auto  |  /config model <id>  |  /config vault <path>  |  /config timeout <seg>  |  /config fallback <model1,model2,...>  |  /config reset")
+                    ui.console.print("[warning]Uso:[/warning] /config  |  /config theme dark|light|auto  |  /config model <id>  |  /config vault <path>  |  /config timeout <seg>  |  /config fallback <model1,model2,...>  |  /config tokens on|off  |  /config reset")
                 continue
 
             if texto.lower() in {"/ajuda", "/help"}:
@@ -450,6 +481,7 @@ def main() -> None:
                     "  /config vault <path>            Define vault padrão\n"
                     "  /config timeout <seg>           Define timeout API\n"
                     "  /config fallback <m1,m2,...>    Define modelos fallback\n"
+                    "  /config tokens on|off           Ativa/desativa contador de tokens\n"
                     "  /config reset                   Reseta configuração\n"
                     "  /ajuda           Mostra esta ajuda\n"
                     "  sair / exit / quit   Termina a conversa",
@@ -460,15 +492,23 @@ def main() -> None:
             mensagens.append({"role": "user", "content": texto})
             try:
                 with ui.thinking():
-                    resposta_texto = executar_ciclo_ferramentas(
+                    resposta_texto, usage = executar_ciclo_ferramentas(
                         cliente, vault, mensagens, 
-                        shutdown_check=lambda: shutdown_requested
+                        shutdown_check=lambda: shutdown_requested,
+                        token_counter=token_counter
                     )
                 if resposta_texto.startswith("(demasiados pedidos"):
                     ui.print_error(resposta_texto)
                     mensagens.pop()
                     continue
                 ui.print_response(resposta_texto)
+                # Mostra contador de tokens se habilitado
+                if config.get("show_tokens"):
+                    ui.print_token_usage(
+                        token_counter.get_turn_summary(),
+                        token_counter.get_session_summary()
+                    )
+                    token_counter.reset_turn()
                 mensagens.append({"role": "assistant", "content": resposta_texto})
             except KeyboardInterrupt:
                 # Ctrl+C durante tool calling
