@@ -241,6 +241,7 @@ python chat.py
 | `/limpar` | Limpa ecrã e reimprime boas-vindas |
 | `/config` | Mostra configuração atual |
 | `/config theme dark|light|auto` | Altera tema de cores (persiste) |
+| `/config tokens on|off` | Ativa/desativa contador de tokens |
 | `/ajuda` / `/help` | Lista comandos |
 | `sair` / `exit` / `quit` | Termina a conversa (auto-save) |
 | `Ctrl+C` | Pergunta confirmação (S/n); 2× Ctrl+C = saída forçada sem salvar |
@@ -272,6 +273,22 @@ O chat trata sinais de interrupção de forma segura:
 | Durante chamada de ferramenta | Termina a ferramenta atual e pergunta confirmação no próximo ciclo |
 
 > **Dica:** Use `sair` / `exit` / `quit` para saída normal com auto-save garantido.
+
+### Contador de Tokens
+
+Opcional — exibe uso de tokens (prompt, completion, total) por turno e acumulado na sessão.
+
+| Comando | Descrição |
+|---------|-----------|
+| `/config tokens on` | Ativa exibição de tokens após cada resposta |
+| `/config tokens off` | Desativa (padrão) |
+
+**Exemplo de saída:**
+```
+Turn: 245 tokens (prompt: 180, completion: 65) | Session: 1,234 tokens (prompt: 900, completion: 334)
+```
+
+> **Nota:** Conta tokens de tool calls (enviados no contexto). Reset a cada nova conversa. Confia nos valores retornados pela API NVIDIA.
 
 ### Histórico Navegável (TUI)
 

@@ -62,9 +62,10 @@ def test_conversar_envia_pedido_correto_e_devolve_mensagem(monkeypatch):
     monkeypatch.setattr(mod.urllib.request, "urlopen", urlopen_falso)
 
     cliente = ClienteNVIDIA()
-    resposta = cliente.conversar([{"role": "user", "content": "oi"}])
+    resposta, usage = cliente.conversar([{"role": "user", "content": "oi"}])
 
     assert resposta["content"] == "olá"
+    assert usage == {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}
     pedido = capturado["pedido"]
     assert pedido.headers["Authorization"] == "Bearer chave-de-teste"
     corpo = json.loads(pedido.data.decode("utf-8"))
@@ -87,7 +88,10 @@ def test_conversar_inclui_ferramentas_no_formato_openai(monkeypatch):
     ferramentas = [
         {"name": "search", "description": "d", "input_schema": {"type": "object", "properties": {}}}
     ]
-    ClienteNVIDIA().conversar([{"role": "user", "content": "oi"}], ferramentas=ferramentas)
+    resposta, usage = ClienteNVIDIA().conversar([{"role": "user", "content": "oi"}], ferramentas=ferramentas)
+
+    assert resposta["content"] == "ok"
+    assert usage == {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}
 
     corpo = capturado["corpo"]
     assert corpo["tool_choice"] == "auto"
@@ -192,8 +196,9 @@ def test_retry_em_erro_429(monkeypatch):
     monkeypatch.setattr(mod.urllib.request, "urlopen", urlopen_429_duas_vezes)
 
     cliente = ClienteNVIDIA(max_retries=3, base_delay=0.01)
-    resposta = cliente.conversar([{"role": "user", "content": "oi"}])
+    resposta, usage = cliente.conversar([{"role": "user", "content": "oi"}])
     assert resposta["content"] == "ok"
+    assert usage == {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}
     assert len(chamadas) == 3  # falha 2x, sucesso na 3ª
 
 
@@ -219,9 +224,10 @@ def test_fallback_para_proximo_modelo(monkeypatch):
         max_retries=1,
         base_delay=0.01
     )
-    resposta = cliente.conversar([{"role": "user", "content": "oi"}])
+    resposta, usage = cliente.conversar([{"role": "user", "content": "oi"}])
 
     assert resposta["content"] == "ok fallback"
+    assert usage == {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}
     assert "modelo-principal" in modelos_tentados
     assert "modelo-fallback" in modelos_tentados
 
