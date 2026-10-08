@@ -451,10 +451,10 @@ def main() -> None:
                     ui.set_config("fallback_models", models)
                 elif parts[1] == "tokens" and len(parts) == 3:
                     if parts[2].lower() in ("on", "true", "1", "yes"):
-                        ui.set_config("show_tokens", True)
+                        ui.set_config("show_tokens", "true")
                         ui.console.print("[success]Contador de tokens ativado.[/success]")
                     elif parts[2].lower() in ("off", "false", "0", "no"):
-                        ui.set_config("show_tokens", False)
+                        ui.set_config("show_tokens", "false")
                         ui.console.print("[success]Contador de tokens desativado.[/success]")
                     else:
                         ui.print_error("Uso: /config tokens on|off")
