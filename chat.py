@@ -1,14 +1,21 @@
 #!/usr/bin/env python3
-"""CLI de conversa com o Nemotron (API da NVIDIA), ligado ao Vault do Mnemo.
+"""
+CLI de conversa com o Nemotron (API da NVIDIA), ligado ao Vault do Mnemo.
 
 Uso:
     export NVIDIA_API_KEY=nvapi-...      # ou põe isto num ficheiro .env
     python chat.py --vault vault-teste
 
 Fica à espera de perguntas na consola. O modelo pode pedir para usar as
-ferramentas do vault (search, read_note, create_note, append_to_note);
+ferramentas do vault (search, read_note, create_note, append_to_note, list_files);
 este programa executa-as e devolve o resultado ao modelo, até ele dar uma
 resposta em texto.
+
+Arquitetura:
+- Loop principal em main(): gere ciclo de vida da conversa
+- executar_ciclo_ferramentas(): orquestra chamadas ao modelo + execução de tools
+- TokenCounter: rastreia tokens (prompt/completion/total) por turno e sessão
+- Signal handlers: SIGINT/SIGTERM para saída graciosa com auto-save
 """
 
 import argparse
@@ -18,7 +25,7 @@ import os
 import signal
 import sys
 import time
-from typing import List, Dict, Any
+from typing import List, Dict, Any, Callable, Tuple, Optional
 
 from mnemo import FerramentasVault, TokenCounter
 from mnemo.modelo_nvidia import ClienteNVIDIA, ErroModeloNVIDIA
@@ -27,7 +34,9 @@ from config import Config, DEFAULTS
 from chat_ui import ChatUI
 from rich.panel import Panel
 
-MAX_CICLOS_FERRAMENTAS = 15  # trava de segurança contra um ciclo sem fim (aumentado de 8 para 15)
+# Máximo de iterações de tool-calling por turno do utilizador
+# Previne loops infinitos se o modelo chamar ferramentas repetidamente
+MAX_CICLOS_FERRAMENTAS = 15
 
 INSTRUCAO_SISTEMA = (
     "És o assistente do Mnemo, uma plataforma pessoal de IA. Tens acesso a um "
@@ -145,7 +154,14 @@ def executar_ciclo_ferramentas(
 
 
 def _salvar_historico(mensagens: List[Dict[str, Any]], raiz_vault: str, modelo: str = "") -> None:
-    """Grava histórico completo (incl. tool calls) em historico/YYYY-MM-DD_HH-MM.md"""
+    """Grava histórico completo (incl. tool calls) em historico/YYYY-MM-DD_HH-MM.md
+    
+    Formato do ficheiro:
+    - Cabeçalho com timestamp e modelo
+    - Mensagens do utilizador e assistente (ignora system)
+    - Tool calls e resultados formatados em Markdown
+    - Guardado como nota na pasta historico/ via FerramentasVault
+    """
     from datetime import datetime
     from mnemo import FerramentasVault
 
@@ -181,6 +197,7 @@ def _salvar_historico(mensagens: List[Dict[str, Any]], raiz_vault: str, modelo: 
 
 
 def main() -> None:
+    """Função principal: configura ambiente, valida, inicia loop de conversa."""
     parser = argparse.ArgumentParser(description="Conversa com o Nemotron ligado ao Vault do Mnemo.")
     parser.add_argument("--vault", default=None, help="Pasta raiz do vault (padrão: config ou vault-teste)")
     parser.add_argument("--modelo", default=None, help="ID do modelo NVIDIA")
@@ -190,7 +207,7 @@ def main() -> None:
 
     carregar_env()
 
-    # Configuração
+    # Configuração: carrega ~/.mnemo/config.json e aplica overrides da CLI
     config = Config.load()
     if args.vault:
         config.set("vault_default", args.vault)
@@ -201,13 +218,13 @@ def main() -> None:
     if args.save_config:
         config.save()
 
-    # UI (criada antes da validação para poder mostrar erros)
+    # UI criada ANTES da validação para poder mostrar erros no console
     config.set("theme", config.get("theme", "auto"))  # garante theme
     ui = ChatUI(config)
 
     vault_path = config.get("vault_default", "vault-teste")
 
-    # Validação de configuração no startup
+    # Validação de configuração no startup (vault existe, API key, pastas permitidas)
     errors = config.validate(vault_path)
     if errors:
         ui.console.print("[error]Configuração inválida:[/error]")
@@ -231,6 +248,7 @@ def main() -> None:
     def _signal_handler(sig, frame):
         nonlocal shutdown_requested
         if shutdown_requested:
+            # 2º sinal -> saída forçada sem gravar histórico
             ui.console.print("\n[error]Saída forçada — histórico NÃO gravado[/error]")
             sys.exit(1)
         shutdown_requested = True
@@ -246,7 +264,7 @@ def main() -> None:
         # atualiza completer com pastas permitidas (path completion)
         ui.update_completer(vault_path)
 
-        # Health check rápido com retry
+        # Health check rápido com retry (3 tentativas, 1s intervalo)
         health_ok = False
         for _ in range(3):
             try:
@@ -488,7 +506,7 @@ def main() -> None:
                     title="Ajuda", border_style="info"))
                 continue
 
-            # mensagem normal do utilizador
+            # Mensagem normal do utilizador -> adiciona ao histórico e processa
             mensagens.append({"role": "user", "content": texto})
             try:
                 with ui.thinking():
