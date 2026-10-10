@@ -306,6 +306,8 @@ def main() -> None:
                     ui.console.print("\n[error]Saída forçada — histórico NÃO gravado[/error]")
                     sys.exit(1)
                 shutdown_requested = True
+                # Aviso imediato: 1º Ctrl+C
+                ui.console.print("\n[warning]Pressione Ctrl+C novamente para sair SEM gravar histórico.[/warning]")
                 continue
 
             if not texto:
@@ -534,6 +536,8 @@ def main() -> None:
                     ui.console.print("\n[error]Saída forçada — histórico NÃO gravado[/error]")
                     sys.exit(1)
                 shutdown_requested = True
+                # Aviso imediato: 1º Ctrl+C
+                ui.console.print("\n[warning]Pressione Ctrl+C novamente para sair SEM gravar histórico.[/warning]")
                 # O loop principal vai tratar na próxima iteração
                 continue
             except ErroModeloNVIDIA as e:
