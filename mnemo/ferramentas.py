@@ -70,6 +70,44 @@ class FerramentasVault:
                 "required": [],
             },
         },
+        {
+            "name": "tag_note",
+            "description": "Adiciona, remove ou substitui tags de uma nota. Tags são armazenadas no frontmatter YAML.",
+            "input_schema": {
+                "type": "object",
+                "properties": {
+                    "caminho": {"type": "string", "description": "Caminho relativo dentro de notas/ (ex.: 'projetos/tarefas.md')"},
+                    "acao": {"type": "string", "enum": ["add", "remove", "set"], "description": "Operação: add=adiciona, remove=remove, set=substitui todas"},
+                    "tags": {"type": "array", "items": {"type": "string"}, "description": "Lista de tags (para add/remove: uma ou mais; para set: lista completa)"}
+                },
+                "required": ["caminho", "acao", "tags"],
+            },
+        },
+        {
+            "name": "search_by_tag",
+            "description": "Busca notas por tag(s). Pode filtrar por modo 'all' (todas as tags) ou 'any' (pelo menos uma).",
+            "input_schema": {
+                "type": "object",
+                "properties": {
+                    "tags": {"type": "array", "items": {"type": "string"}, "description": "Tags para filtrar"},
+                    "modo": {"type": "string", "enum": ["all", "any"], "default": "all", "description": "all=todas as tags; any=pelo menos uma"},
+                    "limite": {"type": "integer", "default": 10, "description": "Máximo de resultados"}
+                },
+                "required": ["tags"],
+            },
+        },
+        {
+            "name": "list_tags",
+            "description": "Lista todas as tags únicas com contagem de notas. Opcionalmente filtra por pasta.",
+            "input_schema": {
+                "type": "object",
+                "properties": {
+                    "pasta": {"type": "string", "description": "Pasta para filtrar (ex.: 'projetos'). Omite para listar tudo."},
+                    "prefixo": {"type": "string", "description": "Filtra tags que começam com este prefixo (para autocomplete)"}
+                },
+                "required": [],
+            },
+        },
     ]
 
     def __init__(self, raiz_vault: str) -> None:
@@ -98,6 +136,12 @@ class FerramentasVault:
                 return self._append_to_note(argumentos)
             if nome == "list_files":
                 return self._list_files(argumentos)
+            if nome == "tag_note":
+                return self._tag_note(argumentos)
+            if nome == "search_by_tag":
+                return self._search_by_tag(argumentos)
+            if nome == "list_tags":
+                return self._list_tags(argumentos)
             return {"ok": False, "erro": f"Ferramenta desconhecida: {nome}"}
         except PermissaoNegada as e:
             return {"ok": False, "erro": str(e)}
@@ -196,3 +240,84 @@ class FerramentasVault:
             pasta = pasta.strip("/")
             linhas = [(c, t) for c, t in linhas if c == pasta or c.startswith(pasta + "/")]
         return {"ok": True, "notas": [{"caminho": c, "titulo": t} for c, t in linhas]}
+
+    # --- tags ---
+
+    def _tag_note(self, args: Dict[str, Any]) -> Dict[str, Any]:
+        """Adiciona, remove ou substitui tags de uma nota."""
+        caminho = args["caminho"]
+        acao = args["acao"]
+        tags = args.get("tags", [])
+        
+        try:
+            if acao == "add":
+                novas_tags = self.armazenamento.adicionar_tag(caminho, tags[0] if tags else "")
+                return {"ok": True, "tags": novas_tags, "acao": "add"}
+            elif acao == "remove":
+                novas_tags = self.armazenamento.remover_tag(caminho, tags[0] if tags else "")
+                return {"ok": True, "tags": novas_tags, "acao": "remove"}
+            elif acao == "set":
+                novas_tags = self.armazenamento.substituir_tags(caminho, tags)
+                return {"ok": True, "tags": novas_tags, "acao": "set"}
+            else:
+                return {"ok": False, "erro": f"Ação inválida: {acao}. Use 'add', 'remove' ou 'set'"}
+        except FileNotFoundError:
+            return {"ok": False, "erro": "Nota não encontrada.", "sugestao": "create_note"}
+        except PermissaoNegada as e:
+            return {"ok": False, "erro": str(e)}
+        except Exception as e:
+            return {"ok": False, "erro": f"Erro ao manipular tags: {e}"}
+
+    def _search_by_tag(self, args: Dict[str, Any]) -> Dict[str, Any]:
+        """Busca notas por tag(s)."""
+        tags = args.get("tags", [])
+        modo = args.get("modo", "all")
+        limite = args.get("limite", 10)
+        
+        if not tags:
+            return {"ok": False, "erro": "Lista de tags vazia"}
+        
+        try:
+            resultados = self.indexador.pesquisar("", limite=limite, tags=tags, modo_tags=modo)
+            return {"ok": True, "resultados": resultados, "tags": tags, "modo": modo}
+        except Exception as e:
+            return {"ok": False, "erro": f"Erro na busca por tags: {e}"}
+
+    def _list_tags(self, args: Dict[str, Any]) -> Dict[str, Any]:
+        """Lista todas as tags únicas com contagem. Opcionalmente filtra por pasta/prefixo."""
+        pasta = args.get("pasta")
+        prefixo = args.get("prefixo", "").lower()
+        
+        try:
+            # Query base: conta tags por nome
+            params: tuple[Any, ...]
+            if pasta:
+                pasta = pasta.strip("/")
+                query = """
+                    SELECT tag, COUNT(DISTINCT nota_id) as count
+                    FROM nota_tags nt
+                    JOIN notas n ON n.id = nt.nota_id
+                    WHERE n.caminho = ? OR n.caminho LIKE ?
+                    GROUP BY tag
+                    ORDER BY count DESC, tag
+                """
+                params = (pasta, pasta + "/%")
+            else:
+                query = """
+                    SELECT tag, COUNT(DISTINCT nota_id) as count
+                    FROM nota_tags
+                    GROUP BY tag
+                    ORDER BY count DESC, tag
+                """
+                params = ()
+            
+            cursor = self.indexador.con.execute(query, params)
+            tags = []
+            for tag, count in cursor:
+                tag_lower = tag.lower()
+                if not prefixo or tag_lower.startswith(prefixo):
+                    tags.append({"tag": tag, "count": count})
+            
+            return {"ok": True, "tags": tags, "total": len(tags)}
+        except Exception as e:
+            return {"ok": False, "erro": f"Erro ao listar tags: {e}"}
