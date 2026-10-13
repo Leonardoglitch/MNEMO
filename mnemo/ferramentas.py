@@ -251,10 +251,14 @@ class FerramentasVault:
         
         try:
             if acao == "add":
-                novas_tags = self.armazenamento.adicionar_tag(caminho, tags[0] if tags else "")
+                novas_tags = []
+                for tag in tags:
+                    novas_tags = self.armazenamento.adicionar_tag(caminho, tag)
                 return {"ok": True, "tags": novas_tags, "acao": "add"}
             elif acao == "remove":
-                novas_tags = self.armazenamento.remover_tag(caminho, tags[0] if tags else "")
+                novas_tags = []
+                for tag in tags:
+                    novas_tags = self.armazenamento.remover_tag(caminho, tag)
                 return {"ok": True, "tags": novas_tags, "acao": "remove"}
             elif acao == "set":
                 novas_tags = self.armazenamento.substituir_tags(caminho, tags)
