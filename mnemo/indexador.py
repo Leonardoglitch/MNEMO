@@ -9,6 +9,7 @@ volta a verificar as permissões em cada resultado. Assim, uma pasta que deixe
 de ser permitida deixa logo de aparecer, mesmo antes de reindexar.
 """
 
+import json
 import re
 import sqlite3
 from pathlib import Path
@@ -21,8 +22,15 @@ CREATE TABLE IF NOT EXISTS notas (
     id            INTEGER PRIMARY KEY,
     caminho       TEXT NOT NULL UNIQUE,   -- relativo a notas/, com '/'
     titulo        TEXT NOT NULL,
-    modificado_ns INTEGER NOT NULL
+    modificado_ns INTEGER NOT NULL,
+    tags          TEXT DEFAULT '[]'       -- JSON array: '["tag1","tag2"]'
 );
+CREATE TABLE IF NOT EXISTS nota_tags (
+    nota_id INTEGER REFERENCES notas(id) ON DELETE CASCADE,
+    tag       TEXT NOT NULL,
+    PRIMARY KEY (nota_id, tag)
+);
+CREATE INDEX IF NOT EXISTS idx_nota_tags_tag ON nota_tags(tag);
 CREATE VIRTUAL TABLE IF NOT EXISTS notas_fts USING fts5(
     titulo, conteudo,
     tokenize = 'unicode61 remove_diacritics 2'   -- "orcamento" acha "orçamento"
@@ -54,6 +62,40 @@ def extrair_titulo(conteudo: str, nome_ficheiro: str) -> str:
     return nome_ficheiro
 
 
+def extrair_tags(conteudo: str) -> List[str]:
+    """Extrai tags do frontmatter YAML.
+    
+    Suporta:
+    - tags: [tag1, tag2, tag3]  (YAML list)
+    - tags: tag1, tag2, tag3    (string CSV)
+    - tags: "tag1, tag2"        (string quoted)
+    
+    Normaliza para lowercase, remove duplicatas, ordena.
+    """
+    frontmatter, _ = separar_frontmatter(conteudo)
+    for linha in frontmatter:
+        if linha.lower().startswith("tags:"):
+            valor = linha.split(":", 1)[1].strip()
+            if not valor:
+                return []
+            # Remove aspas se houver
+            valor = valor.strip("'\"")
+            # Tenta parsear como YAML list primeiro
+            if valor.startswith("[") and valor.endswith("]"):
+                try:
+                    import json
+                    tags = json.loads(valor.replace("'", '"'))
+                except json.JSONDecodeError:
+                    tags = [t.strip() for t in valor[1:-1].split(",")]
+            else:
+                # String CSV
+                tags = [t.strip() for t in valor.split(",")]
+            # Normaliza: lowercase, remove vazios, deduplica, ordena
+            tags_norm = sorted({t.lower() for t in tags if t.strip()})
+            return tags_norm
+    return []
+
+
 class Indexador:
     def __init__(self, perms: Permissoes, caminho_db: Optional[str] = None) -> None:
         self.perms = perms
@@ -72,6 +114,8 @@ class Indexador:
     def _gravar(self, rel: str, alvo: Path) -> None:
         conteudo = alvo.read_text(encoding="utf-8-sig", errors="replace")
         titulo = extrair_titulo(conteudo, alvo.stem)
+        tags = extrair_tags(conteudo)
+        tags_json = json.dumps(tags, ensure_ascii=False)
         _, corpo = separar_frontmatter(conteudo)  # o frontmatter não polui os excertos
         mtime = alvo.stat().st_mtime_ns
         linha = self.con.execute(
@@ -80,16 +124,28 @@ class Indexador:
         if linha:
             nota_id = linha[0]
             self.con.execute(
-                "UPDATE notas SET titulo = ?, modificado_ns = ? WHERE id = ?",
-                (titulo, mtime, nota_id),
+                "UPDATE notas SET titulo = ?, modificado_ns = ?, tags = ? WHERE id = ?",
+                (titulo, mtime, tags_json, nota_id),
             )
             self.con.execute("DELETE FROM notas_fts WHERE rowid = ?", (nota_id,))
+            # Atualiza nota_tags: remove antigas, insere novas
+            self.con.execute("DELETE FROM nota_tags WHERE nota_id = ?", (nota_id,))
+            for tag in tags:
+                self.con.execute(
+                    "INSERT INTO nota_tags (nota_id, tag) VALUES (?, ?)",
+                    (nota_id, tag),
+                )
         else:
             cur = self.con.execute(
-                "INSERT INTO notas (caminho, titulo, modificado_ns) VALUES (?, ?, ?)",
-                (rel, titulo, mtime),
+                "INSERT INTO notas (caminho, titulo, modificado_ns, tags) VALUES (?, ?, ?, ?)",
+                (rel, titulo, mtime, tags_json),
             )
             nota_id = cur.lastrowid
+            for tag in tags:
+                self.con.execute(
+                    "INSERT INTO nota_tags (nota_id, tag) VALUES (?, ?)",
+                    (nota_id, tag),
+                )
         self.con.execute(
             "INSERT INTO notas_fts (rowid, titulo, conteudo) VALUES (?, ?, ?)",
             (nota_id, titulo, corpo),
@@ -100,6 +156,8 @@ class Indexador:
             "SELECT id FROM notas WHERE caminho = ?", (rel,)
         ).fetchone()
         if linha:
+            nota_id = linha[0]
+            self.con.execute("DELETE FROM nota_tags WHERE nota_id = ?", (nota_id,))
             self.con.execute("DELETE FROM notas_fts WHERE rowid = ?", (linha[0],))
             self.con.execute("DELETE FROM notas WHERE id = ?", (linha[0],))
 
@@ -168,28 +226,97 @@ class Indexador:
         self._remover(self._rel(alvo))
         self.con.commit()
 
-    def pesquisar(self, consulta: str, limite: int = 10) -> List[Dict[str, object]]:
+    def pesquisar(self, consulta: str, limite: int = 10, tags: Optional[List[str]] = None, modo_tags: str = "all") -> List[Dict[str, object]]:
         """Devolve [{caminho, titulo, excerto, relevancia}], das mais relevantes.
 
         A consulta é limpa para só ter palavras (aspas, hífenes ou operadores
         que o modelo escreva não rebentam o FTS5). As palavras têm de aparecer
         todas na nota, e cada uma também casa como prefixo ("orça" acha "orçamento").
+
+        Args:
+            consulta: Texto de pesquisa (palavras-chave)
+            limite: Máximo de resultados
+            tags: Lista de tags para filtrar (opcional)
+            modo_tags: "all" = nota deve ter TODAS as tags; "any" = nota deve ter PELO MENOS UMA
         """
+        # Filtro por tags: obtém IDs de notas que correspondem
+        tag_nota_ids: Optional[set[int]] = None
+        if tags:
+            tags_norm = [t.lower() for t in tags]
+            placeholders = ",".join("?" for _ in tags_norm)
+            if modo_tags == "all":
+                # Nota deve ter TODAS as tags
+                query = f"""
+                    SELECT nota_id FROM nota_tags
+                    WHERE tag IN ({placeholders})
+                    GROUP BY nota_id
+                    HAVING COUNT(DISTINCT tag) = ?
+                """
+                params: list[str | int] = tags_norm + [len(tags_norm)]
+            else:  # "any"
+                # Nota deve ter PELO MENOS UMA das tags
+                query = f"""
+                    SELECT DISTINCT nota_id FROM nota_tags
+                    WHERE tag IN ({placeholders})
+                """
+                params = list(tags_norm)
+            cursor = self.con.execute(query, params)
+            tag_nota_ids = {row[0] for row in cursor}
+            if not tag_nota_ids:
+                return []  # nenhuma nota tem as tags pedidas
+
         termos = re.findall(r"\w+", consulta)
-        if not termos:
+        if not termos and not tags:
             return []
-        expressao = " ".join(f'"{t}"*' for t in termos)
-        cursor = self.con.execute(
-            """
-            SELECT n.caminho, n.titulo,
-                   snippet(notas_fts, 1, '[', ']', '…', 12),
-                   bm25(notas_fts, 5.0, 1.0)
-            FROM notas_fts JOIN notas n ON n.id = notas_fts.rowid
-            WHERE notas_fts MATCH ?
-            ORDER BY bm25(notas_fts, 5.0, 1.0)
-            """,
-            (expressao,),
-        )
+
+        # Constrói a query de forma estruturada
+        if termos:
+            expressao = " ".join(f'"{t}"*' for t in termos)
+            
+            # Query base com FTS5
+            if tag_nota_ids is not None:
+                # Com filtro de tags + texto
+                placeholders = ",".join("?" for _ in tag_nota_ids)
+                sql = f"""
+                    SELECT n.caminho, n.titulo,
+                           snippet(notas_fts, 1, '[', ']', '…', 12),
+                           bm25(notas_fts, 5.0, 1.0)
+                    FROM notas_fts JOIN notas n ON n.id = notas_fts.rowid
+                    WHERE notas_fts MATCH ?
+                      AND n.id IN ({placeholders})
+                    ORDER BY bm25(notas_fts, 5.0, 1.0)
+                    LIMIT ?
+                """
+                sql_params = (expressao,) + tuple(tag_nota_ids) + (limite,)
+            else:
+                # Apenas busca textual
+                sql = """
+                    SELECT n.caminho, n.titulo,
+                           snippet(notas_fts, 1, '[', ']', '…', 12),
+                           bm25(notas_fts, 5.0, 1.0)
+                    FROM notas_fts JOIN notas n ON n.id = notas_fts.rowid
+                    WHERE notas_fts MATCH ?
+                    ORDER BY bm25(notas_fts, 5.0, 1.0)
+                    LIMIT ?
+                """
+                sql_params = (expressao, limite)
+        else:
+            # Apenas filtro por tags, sem consulta textual
+            if tag_nota_ids is not None:
+                placeholders = ",".join("?" for _ in tag_nota_ids)
+                sql = f"""
+                    SELECT n.caminho, n.titulo,
+                           '' as excerto,
+                           0.0 as pontuacao
+                    FROM notas n
+                    WHERE n.id IN ({placeholders})
+                    LIMIT ?
+                """
+                sql_params = tuple(tag_nota_ids) + (limite,)
+            else:
+                return []  # sem termos e sem tags
+
+        cursor = self.con.execute(sql, sql_params)
         resultados: List[Dict[str, object]] = []
         for caminho, titulo, excerto, pontuacao in cursor:
             try:
