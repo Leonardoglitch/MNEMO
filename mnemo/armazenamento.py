@@ -99,3 +99,95 @@ class Armazenamento:
         if self.indexador:
             self.indexador.remover_nota(caminho)
         return destino
+
+    # --- tags ---
+
+    def _ler_frontmatter(self, alvo: Path) -> tuple[List[str], str]:
+        """Lê frontmatter e corpo da nota. Retorna (linhas_frontmatter, corpo)."""
+        linhas = alvo.read_text(encoding="utf-8").splitlines()
+        if linhas and linhas[0].strip() == "---":
+            for i in range(1, len(linhas)):
+                if linhas[i].strip() == "---":
+                    return linhas[1:i], "\n".join(linhas[i + 1:])
+        return [], "\n".join(linhas)
+
+    def _extrair_tags_do_frontmatter(self, frontmatter: List[str]) -> List[str]:
+        """Extrai tags do frontmatter. Suporta YAML list e string CSV."""
+        for linha in frontmatter:
+            if linha.lower().startswith("tags:"):
+                valor = linha.split(":", 1)[1].strip()
+                if not valor:
+                    return []
+                valor = valor.strip("'\"")
+                if valor.startswith("[") and valor.endswith("]"):
+                    try:
+                        tags = json.loads(valor.replace("'", '"'))
+                    except json.JSONDecodeError:
+                        tags = [t.strip() for t in valor[1:-1].split(",")]
+                else:
+                    tags = [t.strip() for t in valor.split(",")]
+                return sorted({t.lower() for t in tags if t.strip()})
+        return []
+
+    def ler_tags(self, caminho: str) -> List[str]:
+        """Lê tags da nota."""
+        alvo = self._nota_existente(caminho)
+        frontmatter, _ = self._ler_frontmatter(alvo)
+        return self._extrair_tags_do_frontmatter(frontmatter)
+
+    def _escrever_frontmatter(self, alvo: Path, frontmatter: List[str], corpo: str) -> None:
+        """Escreve frontmatter + corpo de forma atómica."""
+        linhas = ["---"] + frontmatter + ["---", corpo]
+        if not corpo.endswith("\n"):
+            linhas.append("")
+        self._escrever_atomico(alvo, "\n".join(linhas))
+
+    def escrever_tags(self, caminho: str, tags: List[str]) -> None:
+        """Substitui todas as tags da nota (com backup)."""
+        alvo = self._nota_existente(caminho)
+        frontmatter, corpo = self._ler_frontmatter(alvo)
+        
+        # Normaliza tags
+        tags_norm = sorted({t.lower().strip() for t in tags if t.strip()})
+        tags_json = json.dumps(tags_norm, ensure_ascii=False)
+        
+        # Atualiza ou adiciona linha tags:
+        tags_linha = f"tags: {tags_json}"
+        nova_frontmatter = []
+        tags_encontrada = False
+        for linha in frontmatter:
+            if linha.lower().startswith("tags:"):
+                nova_frontmatter.append(tags_linha)
+                tags_encontrada = True
+            else:
+                nova_frontmatter.append(linha)
+        if not tags_encontrada:
+            nova_frontmatter.append(tags_linha)
+        
+        # Backup e escrita atómica
+        self._copiar_para(alvo, self.backups)
+        self._escrever_frontmatter(alvo, nova_frontmatter, corpo)
+        self._indexar(caminho)
+
+    def adicionar_tag(self, caminho: str, tag: str) -> List[str]:
+        """Adiciona uma tag à nota. Retorna lista atualizada."""
+        tags = self.ler_tags(caminho)
+        tag_norm = tag.lower().strip()
+        if tag_norm and tag_norm not in tags:
+            tags.append(tag_norm)
+            self.escrever_tags(caminho, tags)
+        return tags
+
+    def remover_tag(self, caminho: str, tag: str) -> List[str]:
+        """Remove uma tag da nota. Retorna lista atualizada."""
+        tags = self.ler_tags(caminho)
+        tag_norm = tag.lower().strip()
+        if tag_norm in tags:
+            tags.remove(tag_norm)
+            self.escrever_tags(caminho, tags)
+        return tags
+
+    def substituir_tags(self, caminho: str, tags: List[str]) -> List[str]:
+        """Substitui todas as tags da nota. Retorna lista aplicada."""
+        self.escrever_tags(caminho, tags)
+        return self.ler_tags(caminho)
