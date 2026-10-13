@@ -10,11 +10,12 @@ Lê, cria, edita e "apaga" notas .md. Todas as operações passam primeiro por
 .backups/ e .lixo/ ficam fora de notas/, por isso o agente não lhes acede.
 """
 
+import json
 import os
 import shutil
 from datetime import datetime
 from pathlib import Path
-from typing import Optional
+from typing import List, Optional
 
 from .permissoes import Permissoes, PermissaoNegada  # noqa: F401
 from .indexador import Indexador  # noqa: F401
