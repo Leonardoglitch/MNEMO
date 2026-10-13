@@ -33,7 +33,7 @@ if TYPE_CHECKING:
 
 
 class PathCompleter(Completer):
-    """Completer contextual: completa paths para comandos de nota, comandos gerais caso contrário."""
+    """Completer contextual: completa paths para comandos de nota, tags para comando tag, comandos gerais caso contrário."""
 
     def __init__(self, vault_root: str, base_commands: List[str]) -> None:
         self.vault_root = vault_root
@@ -45,10 +45,13 @@ class PathCompleter(Completer):
         text = document.text_before_cursor
 
         # Comandos de nota que aceitam paths
-        for cmd in ["create_note", "read_note", "append_to_note", "list_files"]:
+        for cmd in ["create_note", "read_note", "append_to_note", "list_files", "tag"]:
             if text.startswith(cmd + " "):
                 prefix = text[len(cmd) + 1:]
-                yield from self._complete_path(prefix)
+                if cmd == "tag":
+                    yield from self._complete_tag(prefix)
+                else:
+                    yield from self._complete_path(prefix)
                 return
 
         # Completer padrão: comandos + pastas raiz
@@ -77,6 +80,54 @@ class PathCompleter(Completer):
                 rel = str(p.relative_to(base)) + "/"
                 if rel.startswith(prefix):
                     yield Completion(rel, start_position=-len(prefix))
+
+    def _complete_tag(self, prefix: str) -> Generator[Completion, None, None]:
+        """Completa tags para o comando /tag.
+        
+        Espera formato: <caminho> add|remove|set <tag...>
+        Completa o caminho primeiro, depois as tags existentes.
+        """
+        parts = prefix.split()
+        if len(parts) < 2:
+            # Completa caminho ou ação
+            if len(parts) == 1:
+                # Completa caminho
+                yield from self._complete_path(parts[0])
+            else:
+                # Completa ação (add, remove, set)
+                for action in ["add", "remove", "set"]:
+                    if action.startswith(parts[1]):
+                        yield Completion(action, start_position=-len(parts[1]))
+            return
+        
+        # Já tem caminho e ação, completa tags
+        caminho = parts[0]
+        if len(parts) == 2:
+            # Apenas caminho, completa ação
+            for action in ["add", "remove", "set"]:
+                if action.startswith(parts[1]):
+                    yield Completion(action, start_position=-len(parts[1]))
+            return
+        
+        acao = parts[1]
+        if acao not in ("add", "remove", "set"):
+            return
+        
+        # Obtém tags existentes para autocomplete
+        try:
+            from mnemo.armazenamento import Armazenamento
+            from mnemo.permissoes import Permissoes
+            perms = Permissoes(self.vault_root)
+            armazenamento = Armazenamento(perms)
+            tags_existentes = armazenamento.ler_tags(caminho)
+        except Exception:
+            tags_existentes = []
+        
+        # Última palavra é o prefixo da tag a completar
+        tag_prefix = parts[-1] if parts else ""
+        for tag in tags_existentes:
+            if tag.startswith(tag_prefix):
+                yield Completion(tag, start_position=-len(tag_prefix))
 
 
 CompleterType = Union[WordCompleter, PathCompleter]

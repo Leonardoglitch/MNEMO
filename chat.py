@@ -383,6 +383,68 @@ def main() -> None:
                     ui.console.print("[warning]Uso:[/warning] /historico [--since YYYY-MM-DD] [--until YYYY-MM-DD] [--model <modelo]]  |  /historico search <termo>  |  /historico load <id>  |  /historico export <arquivo.json> [--since ...] [--until ...] [--model ...]  |  /historico import <arquivo.json>")
                 continue
 
+            if texto.startswith("/tag"):
+                parts = shlex.split(texto)
+                if len(parts) < 3:
+                    ui.console.print("[warning]Uso:[/warning] /tag <caminho> add|remove|set <tag1> [tag2] ...")
+                    continue
+                caminho = parts[1]
+                acao = parts[2]
+                tags = parts[3:] if len(parts) > 3 else []
+                if acao not in ("add", "remove", "set"):
+                    ui.console.print("[warning]Ação inválida:[/warning] use add, remove ou set")
+                    continue
+                try:
+                    with FerramentasVault(vault_path) as ferramentas:
+                        if acao == "add":
+                            for tag in tags:
+                                novas = ferramentas.armazenamento.adicionar_tag(caminho, tag)
+                            ui.console.print(f"[success]Tags adicionadas:[/success] {', '.join(novas)}")
+                        elif acao == "remove":
+                            for tag in tags:
+                                novas = ferramentas.armazenamento.remover_tag(caminho, tag)
+                            ui.console.print(f"[success]Tags removidas:[/success] {', '.join(novas)}")
+                        elif acao == "set":
+                            novas = ferramentas.armazenamento.substituir_tags(caminho, tags)
+                            ui.console.print(f"[success]Tags definidas:[/success] {', '.join(novas)}")
+                except FileNotFoundError:
+                    ui.console.print("[error]Nota não encontrada.[/error]")
+                except PermissaoNegada as e:
+                    ui.console.print(f"[error]{e}[/error]")
+                except Exception as e:
+                    ui.console.print(f"[error]Erro ao manipular tags: {e}[/error]")
+                continue
+
+            if texto.startswith("/tags"):
+                parts = shlex.split(texto)
+                pasta = None
+                prefixo = None
+                i = 1
+                while i < len(parts):
+                    if parts[i] == "--pasta" and i + 1 < len(parts):
+                        pasta = parts[i + 1]
+                        i += 2
+                    elif parts[i] == "--prefixo" and i + 1 < len(parts):
+                        prefixo = parts[i + 1]
+                        i += 2
+                    else:
+                        i += 1
+                try:
+                    with FerramentasVault(vault_path) as ferramentas:
+                        resultado = ferramentas.executar("list_tags", {"pasta": pasta, "prefixo": prefixo})
+                        if resultado["ok"]:
+                            if resultado["tags"]:
+                                ui.console.print(f"[info]Tags ({resultado['total']} únicas):[/info]")
+                                for t in resultado["tags"]:
+                                    ui.console.print(f"  {t['tag']} ({t['count']})")
+                            else:
+                                ui.console.print("[muted]Nenhuma tag encontrada.[/muted]")
+                        else:
+                            ui.console.print(f"[error]{resultado['erro']}[/error]")
+                except Exception as e:
+                    ui.console.print(f"[error]Erro ao listar tags: {e}[/error]")
+                continue
+
             if texto == "/limpar":
                 ui.clear()
                 continue
@@ -413,6 +475,13 @@ def main() -> None:
                     "  /config timeout 60            # Timeout 60s\n"
                     "  /config fallback m1,m2        # Modelos fallback\n"
                     "  /config reset                 # Reset para padrões\n\n"
+                    "TAGS\n"
+                    "  /tag <caminho> add <tag1> [tag2]  # Adiciona tag(s)\n"
+                    "  /tag <caminho> remove <tag>       # Remove tag\n"
+                    "  /tag <caminho> set <tag1> [tag2]  # Substitui todas\n"
+                    "  /tags                           # Lista todas as tags\n"
+                    "  /tags --pasta projetos           # Filtra por pasta\n"
+                    "  /tags --prefixo trab             # Autocomplete por prefixo\n\n"
                     "MODELO\n"
                     "  /modelo nvidia/nemotron-3-ultra  # Troca modelo (sessão)\n\n"
                     "NOTAS (usam autocomplete Tab)\n"
