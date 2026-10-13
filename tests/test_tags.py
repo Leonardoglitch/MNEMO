@@ -298,7 +298,8 @@ class TestFerramentasTags:
             assert resultado["ok"] is True
             tags = [t["tag"] for t in resultado["tags"]]
             assert "trabalho" in tags
-            assert "tarefa" in tags
+            # "tarefa" starts with "tar", not "tra"
+            # assert "tarefa" in tags
             assert "programacao" not in tags
 
 
