@@ -2,7 +2,7 @@
 
 Plataforma local-first para notas Markdown com pesquisa semântica e assistente conversacional (Nemotron/NVIDIA).
 
-![Tests](https://img.shields.io/badge/tests-85%20passing-brightgreen)
+![Tests](https://img.shields.io/badge/tests-111%20passing-brightgreen)
 ![Mypy](https://img.shields.io/badge/mypy--strict-core%20modules-blue)
 ![Python](https://img.shields.io/badge/python-3.9%2B-blue)
 ![License](https://img.shields.io/badge/license-MIT-green)
@@ -153,7 +153,7 @@ python chat.py
 
 ```bash
 python -m pytest tests/ -v
-# 85 testes: permissões, índice, modelo NVIDIA, chat, ferramentas, UI, config, histórico
+# 111 testes: permissões, índice, modelo NVIDIA, chat, ferramentas, UI, config, histórico, tags
 ```
 
 ## Desenvolvimento
@@ -187,7 +187,8 @@ tests/
 ├── test_chat.py             # Loop tool-calling, comandos
 ├── test_chat_ui.py          # UI, formatação, TUI histórico
 ├── test_config.py           # Config persistente, validação
-└── test_historico.py        # Histórico: TUI, busca, filtros, export/import, autocomplete
+├── test_historico.py        # Histórico: TUI, busca, filtros, export/import, autocomplete
+└── test_tags.py             # Tags: armazenamento, indexador, ferramentas, integração (26 testes)
 ```
 
 ### Convenções de Código
@@ -242,6 +243,12 @@ python chat.py
 | `/config` | Mostra configuração atual |
 | `/config theme dark|light|auto` | Altera tema de cores (persiste) |
 | `/config tokens on|off` | Ativa/desativa contador de tokens |
+| `/tag <caminho> add <tag1> [tag2]...` | Adiciona tag(s) à nota |
+| `/tag <caminho> remove <tag>` | Remove tag da nota |
+| `/tag <caminho> set <tag1> [tag2]...` | Substitui todas as tags da nota |
+| `/tags` | Lista todas as tags com contagem |
+| `/tags --pasta projetos` | Filtra tags por pasta |
+| `/tags --prefixo trab` | Autocomplete por prefixo |
 | `/ajuda` / `/help` | Lista comandos |
 | `sair` / `exit` / `quit` | Termina a conversa (auto-save) |
 | `Ctrl+C` | Pergunta confirmação (S/n); 2× Ctrl+C = saída forçada sem salvar |
@@ -290,6 +297,42 @@ Turn: 245 tokens (prompt: 180, completion: 65) | Session: 1,234 tokens (prompt: 
 
 > **Nota:** Conta tokens de tool calls (enviados no contexto). Reset a cada nova conversa. Confia nos valores retornados pela API NVIDIA.
 
+### Tags
+
+Sistema de etiquetas para organização e descoberta de notas. Tags são armazenadas no frontmatter YAML (`tags: [tag1, tag2]`) e indexadas no SQLite para busca rápida.
+
+| Comando | Descrição |
+|---------|-----------|
+| `/tag <caminho> add <tag1> [tag2]...` | Adiciona tag(s) à nota |
+| `/tag <caminho> remove <tag>` | Remove tag da nota |
+| `/tag <caminho> set <tag1> [tag2]...` | Substitui todas as tags da nota |
+| `/tags` | Lista todas as tags com contagem |
+| `/tags --pasta projetos` | Filtra tags por pasta |
+| `/tags --prefixo trab` | Autocomplete por prefixo |
+
+**Exemplos:**
+```bash
+/tag projetos/reuniao.md add trabalho urgente
+/tag projetos/reuniao.md remove urgente
+/tag projetos/reuniao.md set trabalho reuniao importante
+/tags --pasta projetos --prefixo trab
+```
+
+**Busca por tags (via agente):**
+```bash
+# Busca notas com AMBAS as tags (AND)
+Tu: Busca notas com tags trabalho e reuniao
+
+# Busca notas com PELO MENOS UMA das tags (OR)
+Tu: Busca notas com tags trabalho ou estudo
+```
+
+**Funcionalidades:**
+- Tags normalizadas (lowercase, sem espaços, deduplicadas, ordenadas)
+- Armazenadas no frontmatter YAML: `tags: [tag1, tag2]`
+- Indexadas na tabela `nota_tags` para busca O(log n)
+- Autocomplete no REPL: `/tag projetos/nota.md add <Tab>`
+
 ### Histórico Navegável (TUI)
 
 O comando `/historico` sem argumentos abre uma **interface interativa (TUI)** com navegação por setas:
@@ -331,12 +374,12 @@ O comando `/historico` sem argumentos abre uma **interface interativa (TUI)** co
 | Módulo | Responsabilidade |
 |--------|------------------|
 | `permissoes.py` | Whitelist de pastas, bloqueio de path traversal |
-| `armazenamento.py` | CRUD atômico + backups + lixo (.lixo/) |
-| `indexador.py` | SQLite FTS5, prefixo + remove_diacritics |
-| `ferramentas.py` | search, read_note, create_note, append_to_note, list_files |
+| `armazenamento.py` | CRUD atômico + backups + lixo (.lixo/) + **tags (CRUD no frontmatter)** |
+| `indexador.py` | SQLite FTS5, prefixo + remove_diacritics + **indexação e busca por tags** |
+| `ferramentas.py` | search, read_note, create_note, append_to_note, list_files, **tag_note, search_by_tag, list_tags** |
 | `modelo_nvidia.py` | Cliente HTTP OpenAI-compatível p/ Nemotron |
-| `chat.py` | Loop tool-calling com histórico de mensagens |
-| `chat_ui.py` | UI rich + prompt_toolkit (cores, spinners, **TUI histórico interativa, busca, filtros, export/import, PathCompleter autocomplete**) |
+| `chat.py` | Loop tool-calling com histórico de mensagens + **comandos /tag, /tags** |
+| `chat_ui.py` | UI rich + prompt_toolkit (cores, spinners, **TUI histórico interativa, busca, filtros, export/import, PathCompleter autocomplete + tags**) |
 | `config.py` | Configuração persistente `~/.mnemo/config.json` + validação startup |
 
 ## Convenções Git
