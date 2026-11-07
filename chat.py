@@ -27,7 +27,7 @@ import sys
 import time
 from typing import List, Dict, Any, Callable, Tuple, Optional
 
-from mnemo import FerramentasVault, TokenCounter
+from mnemo import FerramentasVault, TokenCounter, PermissaoNegada
 from mnemo.modelo_nvidia import ClienteNVIDIA, ErroModeloNVIDIA
 
 from config import Config, DEFAULTS
