@@ -245,7 +245,7 @@ def main() -> None:
     # Flag para controlo de saída (Ctrl+C duplo força saída)
     shutdown_requested = False
 
-    def _signal_handler(sig, frame):
+    def _signal_handler(sig: int, frame: Any) -> None:
         nonlocal shutdown_requested
         if shutdown_requested:
             # 2º sinal -> saída forçada sem gravar histórico
