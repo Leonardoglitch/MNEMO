@@ -27,7 +27,7 @@ import sys
 import time
 from typing import List, Dict, Any, Callable, Tuple, Optional
 
-from mnemo import FerramentasVault, PermissaoNegada, TokenCounter
+from mnemo import FerramentasVault, TokenCounter
 from mnemo.modelo_nvidia import ClienteNVIDIA, ErroModeloNVIDIA
 
 from config import Config, DEFAULTS
@@ -78,7 +78,7 @@ def carregar_env(caminho: str = ".env") -> None:
 
 def executar_ciclo_ferramentas(
     cliente: ClienteNVIDIA, vault: FerramentasVault, mensagens: List[Dict[str, Any]], 
-    shutdown_check: Optional[Callable[[], bool]] = None, token_counter: Optional[TokenCounter] = None
+    shutdown_check: callable = None, token_counter: "TokenCounter" = None
 ) -> tuple[str, Dict[str, int]]:
     """Envia mensagens ao modelo e executa as ferramentas que ele pedir.
     
