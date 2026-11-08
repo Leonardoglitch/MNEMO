@@ -12,7 +12,7 @@ import os
 import time
 import urllib.error
 import urllib.request
-from typing import Any, Dict, Generator, List, Optional, Tuple, Union, IO
+from typing import Any, Dict, Generator, Iterable, List, Optional, Tuple, Union, cast
 
 URL_BASE = "https://integrate.api.nvidia.com/v1/chat/completions"
 MODELO_PADRAO = "nvidia/nemotron-3.5-lightning-30b-a3b"
@@ -65,12 +65,9 @@ class ClienteNVIDIA:
         self.max_retries = max_retries
         self.base_delay = base_delay
 
-    def _fazer_pedido_bruto(
-        self, corpo: Dict[str, Any], stream: bool = False
-    ) -> Union[Dict[str, Any], Generator[Dict[str, Any], None, None]]:
-        """Faz o pedido HTTP à API. Se stream=True, retorna generator de chunks.
-        Levanta exceções originais para erros HTTP/URL (não embrulha)."""
-        pedido = urllib.request.Request(
+    def _construir_pedido(self, corpo: Dict[str, Any]) -> urllib.request.Request:
+        """Constrói o objeto Request para a API."""
+        return urllib.request.Request(
             self.url_base,
             data=json.dumps(corpo).encode("utf-8"),
             headers={
@@ -79,16 +76,22 @@ class ClienteNVIDIA:
             },
             method="POST",
         )
-        with urllib.request.urlopen(pedido, timeout=self.timeout) as resposta:
-            if stream:
-                return self._iter_stream(resposta)
-            dados = json.loads(resposta.read().decode("utf-8"))
-            return dados  # type: ignore[return-value]
 
-    def _iter_stream(self, resposta: IO[bytes]) -> Generator[Dict[str, Any], None, None]:
+    def _pedido_json(self, corpo: Dict[str, Any]) -> Dict[str, Any]:
+        """Faz pedido normal (não streaming) e retorna o JSON completo."""
+        with urllib.request.urlopen(self._construir_pedido(corpo), timeout=self.timeout) as resposta:
+            return cast(Dict[str, Any], json.loads(resposta.read().decode("utf-8")))
+
+    def _pedido_stream(self, corpo: Dict[str, Any]) -> Generator[Dict[str, Any], None, None]:
+        """Faz pedido em streaming (SSE). A ligação fica aberta DENTRO do generator,
+        senão o `with` fechava-a antes de se consumirem os chunks."""
+        with urllib.request.urlopen(self._construir_pedido(corpo), timeout=self.timeout) as resposta:
+            yield from self._iter_stream(resposta)
+
+    def _iter_stream(self, resposta: Iterable[bytes]) -> Generator[Dict[str, Any], None, None]:
         """Itera sobre resposta de streaming (Server-Sent Events)."""
-        for linha in resposta:  # type: ignore[union-attr]
-            linha = linha.decode("utf-8").strip()
+        for linha_bruta in resposta:
+            linha = linha_bruta.decode("utf-8").strip()
             if not linha or linha == "data: [DONE]":
                 continue
             if linha.startswith("data: "):
@@ -158,13 +161,12 @@ class ClienteNVIDIA:
                         corpo["stream"] = True
 
                     # Tenta fazer o pedido
-                    resultado = self._fazer_pedido_bruto(corpo, stream=stream)
-
-                    # Sucesso!
                     if stream:
-                        return self._processar_stream(resultado)  # type: ignore[return-value]
+                        resultado_gen = self._pedido_stream(corpo)
+                        return self._processar_stream(resultado_gen)
                     else:
-                        return self._extrair_mensagem(resultado)  # type: ignore[return-value]
+                        resultado = self._pedido_json(corpo)
+                        return self._extrair_mensagem(resultado)
 
                 except (urllib.error.HTTPError, urllib.error.URLError, TimeoutError) as e:
                     if not self._deve_tentar_novamente(e):
@@ -196,7 +198,7 @@ class ClienteNVIDIA:
     def health_check(self) -> bool:
         """Verifica se a API está acessível com um pedido mínimo."""
         try:
-            self._fazer_pedido_bruto({
+            self._pedido_json({
                 "model": self.modelo,
                 "messages": [{"role": "user", "content": "ping"}],
                 "max_tokens": 1,

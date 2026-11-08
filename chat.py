@@ -78,7 +78,7 @@ def carregar_env(caminho: str = ".env") -> None:
 
 def executar_ciclo_ferramentas(
     cliente: ClienteNVIDIA, vault: FerramentasVault, mensagens: List[Dict[str, Any]], 
-    shutdown_check: callable = None, token_counter: "TokenCounter" = None
+    shutdown_check: Optional[Callable[[], bool]] = None, token_counter: Optional[TokenCounter] = None
 ) -> tuple[str, Dict[str, int]]:
     """Envia mensagens ao modelo e executa as ferramentas que ele pedir.
     
@@ -245,7 +245,7 @@ def main() -> None:
     # Flag para controlo de saída (Ctrl+C duplo força saída)
     shutdown_requested = False
 
-    def _signal_handler(sig, frame):
+    def _signal_handler(sig: int, frame: Optional[object]) -> None:
         nonlocal shutdown_requested
         if shutdown_requested:
             # 2º sinal -> saída forçada sem gravar histórico
@@ -532,12 +532,12 @@ def main() -> None:
                     ui.console.print("[info]Vault padrão alterado. Reiniciará na próxima sessão.[/info]")
                 elif parts[1] == "timeout" and len(parts) == 3:
                     try:
-                        ui.set_config("timeout", int(parts[2]))
+                        ui.set_config("timeout", parts[2])
                     except ValueError:
                         ui.print_error("Timeout deve ser um número inteiro (segundos)")
                 elif parts[1] == "fallback" and len(parts) >= 3:
                     models = [m.strip() for m in " ".join(parts[2:]).split(",")]
-                    ui.set_config("fallback_models", models)
+                    ui.set_config("fallback_models", ",".join(models))
                 elif parts[1] == "tokens" and len(parts) == 3:
                     if parts[2].lower() in ("on", "true", "1", "yes"):
                         ui.set_config("show_tokens", "true")

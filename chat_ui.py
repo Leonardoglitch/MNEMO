@@ -21,6 +21,7 @@ from prompt_toolkit.key_binding import KeyBindings
 from prompt_toolkit.application import Application
 from prompt_toolkit.layout import Layout, Window
 from prompt_toolkit.layout.controls import FormattedTextControl
+from prompt_toolkit.formatted_text import StyleAndTextTuples
 from prompt_toolkit.styles import Style
 from prompt_toolkit.document import Document
 from prompt_toolkit.completion import CompleteEvent
@@ -149,6 +150,7 @@ class ChatUI:
         """Lazy initialization do PromptSession para evitar erro em testes sem console."""
         if self._session is None:
             self._setup_prompt_session()
+        assert self._session is not None
         return self._session
 
     def _ensure_session(self) -> None:
@@ -205,16 +207,16 @@ class ChatUI:
         kb = KeyBindings()
 
         @kb.add("c-l")
-        def _clear(event) -> None:
+        def _clear(event: Any) -> None:
             event.app.renderer.clear()
 
         @kb.add("c-c")
-        def _cancel(event) -> None:
+        def _cancel(event: Any) -> None:
             # cancela input atual, não sai do programa
             event.app.current_buffer.reset()
 
         @kb.add("c-d")
-        def _eof(event) -> None:
+        def _eof(event: Any) -> None:
             # EOF - sair graciosamente
             event.app.exit(result=EOFError)
 
@@ -230,7 +232,7 @@ class ChatUI:
         """Atualiza auto-complete com pastas permitidas do vault (com path completion)."""
         self._ensure_session()
         self._completer = PathCompleter(vault_root, self._base_commands)
-        self._session.completer = self._completer
+        self.session.completer = self._completer
 
     # ------------------------------------------------------------------ public API
     def welcome(self, vault: str, model: str) -> None:
@@ -286,11 +288,15 @@ class ChatUI:
 
     def confirm(self, msg: str, default: bool = True) -> bool:
         """Prompt de confirmação sim/não (usa prompt_toolkit)."""
-        from prompt_toolkit.shortcuts import confirm as pt_confirm
+        from prompt_toolkit.shortcuts import prompt as pt_prompt
+        sufixo = " (S/n) " if default else " (s/N) "
         try:
-            return pt_confirm(msg, default=default)
+            resposta = pt_prompt(msg + sufixo).strip().lower()
         except (EOFError, KeyboardInterrupt):
             return default
+        if not resposta:
+            return default
+        return resposta in ("s", "sim", "y", "yes")
 
     def show_status(self, vault_root: str, cliente: "ClienteNVIDIA", config: Config) -> None:
         """Mostra painel com estado completo do sistema."""
@@ -336,7 +342,8 @@ class ChatUI:
         self.console.print(Panel(content, title=title, border_style="info"))
 
     def prompt(self, prompt_text: str = "Tu: ") -> str:
-        return self.session.prompt(prompt_text).strip()
+        result = self.session.prompt(prompt_text).strip()
+        return str(result)
 
     def clear(self) -> None:
         self.console.clear()
@@ -358,8 +365,8 @@ class ChatUI:
         for f in files:
             try:
                 txt = f.read_text(encoding="utf-8")
-                preview = txt.split("\n")[1:4]  # pula título
-                preview = " ".join(p.strip() for p in preview if p.strip())
+                linhas_txt = txt.split("\n")[1:4]  # pula título
+                preview = " ".join(p.strip() for p in linhas_txt if p.strip())
                 if len(preview) > 120:
                     preview = preview[:117] + "..."
             except Exception:
@@ -423,16 +430,17 @@ class ChatUI:
         lines = [f"  [prompt]{k}[/prompt]: [info]{v}[/info]" for k, v in data.items()]
         self.console.print(Panel("\n".join(lines), title="Configuração Atual", border_style="info"))
 
-    def set_config(self, key: str, value: str) -> None:
+    def set_config(self, key: str, value: Any) -> None:
         try:
-            # tenta converter para tipo original
+            # tenta converter para tipo original (só se vier como texto)
             default = self.config.data.get(key)
-            if isinstance(default, bool):
-                value = value.lower() in ("true", "1", "sim", "yes")
-            elif isinstance(default, int):
-                value = int(value)
-            elif isinstance(default, list):
-                value = [v.strip() for v in value.split(",")]
+            if isinstance(value, str):
+                if isinstance(default, bool):
+                    value = value.lower() in ("true", "1", "sim", "yes")
+                elif isinstance(default, int):
+                    value = int(value)
+                elif isinstance(default, list):
+                    value = [v.strip() for v in value.split(",")]
             self.config.set(key, value)
             self.config.save()
             self.console.print(f"[success]Config[/success] {key} = [info]{value}[/info]")
@@ -578,8 +586,8 @@ class ChatUI:
         for f in files:
             try:
                 txt = f.read_text(encoding="utf-8")
-                preview = txt.split("\n")[1:4]
-                preview = " ".join(p.strip() for p in preview if p.strip())
+                linhas_txt = txt.split("\n")[1:4]
+                preview = " ".join(p.strip() for p in linhas_txt if p.strip())
                 if len(preview) > 100:
                     preview = preview[:97] + "..."
             except Exception:
@@ -589,7 +597,7 @@ class ChatUI:
         selected_index = [0]  # mutable para closure
         result: List[Optional[str]] = [None]  # para capturar resultado
 
-        def get_formatted_text() -> List[Tuple[str, str]]:
+        def get_formatted_text() -> Any:
             """Gera texto formatado para a lista."""
             result_text: List[Tuple[str, str]] = []
             for i, (nome, preview) in enumerate(items):
@@ -604,24 +612,24 @@ class ChatUI:
         kb = KeyBindings()
 
         @kb.add("up")
-        def _up(event) -> None:
+        def _up(event: Any) -> None:
             if selected_index[0] > 0:
                 selected_index[0] -= 1
 
         @kb.add("down")
-        def _down(event) -> None:
+        def _down(event: Any) -> None:
             if selected_index[0] < len(items) - 1:
                 selected_index[0] += 1
 
         @kb.add("enter")
-        def _enter(event) -> None:
+        def _enter(event: Any) -> None:
             result[0] = items[selected_index[0]][0]
             event.app.exit()
 
         @kb.add("c-c")
         @kb.add("q")
         @kb.add("escape")
-        def _quit(event) -> None:
+        def _quit(event: Any) -> None:
             result[0] = None
             event.app.exit()
 
