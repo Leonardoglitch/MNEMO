@@ -3,7 +3,7 @@
 Plataforma local-first para notas Markdown com pesquisa semântica e assistente conversacional (Nemotron/NVIDIA).
 
 ![Tests](https://img.shields.io/badge/tests-111%20passing-brightgreen)
-![Mypy](https://img.shields.io/badge/mypy--strict-core%20modules-blue)
+![Mypy](https://img.shields.io/badge/mypy--strict-full%20project-blue)
 ![Python](https://img.shields.io/badge/python-3.9%2B-blue)
 ![License](https://img.shields.io/badge/license-MIT-green)
 
@@ -31,7 +31,7 @@ MNEMO/
 │   ├── indexador.py
 │   ├── ferramentas.py
 │   └── modelo_nvidia.py
-├── tests/              # 56 testes pytest
+├── tests/              # 111 testes pytest
 ├── vault-teste/        # vault de demonstração (commit-safe)
 ├── chat.py             # CLI interativo
 ├── chat_ui.py          # UI (rich + prompt_toolkit)
@@ -158,22 +158,16 @@ python -m pytest tests/ -v
 
 ## Desenvolvimento
 
+## Desenvolvimento
+
 ### Type Checking (mypy)
 
 ```bash
-# Módulos core (mnemo/, config.py) — strict mode passa
-python -m mypy --strict mnemo/ config.py
-
-# Projeto completo — 37 erros residuais em código TUI/HTTP dinâmico (não bloqueantes)
+# Projeto completo — strict mode passa em tudo
 python -m mypy --strict mnemo/ chat.py chat_ui.py config.py
 ```
 
-**Erros conhecidos (falsos positivos):**
-- `mnemo/modelo_nvidia.py` (6): `urllib.request` sem stubs completos
-- `chat_ui.py` (24): `prompt_toolkit` API dinâmica (closures, decorators)
-- `chat.py` (7): Union types no loop de ferramentas (refinamento manual)
-
-Todos os 85 testes passam — o código funciona corretamente.
+Todos os erros de tipo foram corrigidos. O projeto passa em `mypy --strict` sem erros.
 
 ### Estrutura de Testes
 
@@ -190,6 +184,8 @@ tests/
 ├── test_historico.py        # Histórico: TUI, busca, filtros, export/import, autocomplete
 └── test_tags.py             # Tags: armazenamento, indexador, ferramentas, integração (26 testes)
 ```
+
+**Total: 111 testes**
 
 ### Convenções de Código
 
