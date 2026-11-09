@@ -158,8 +158,6 @@ python -m pytest tests/ -v
 
 ## Desenvolvimento
 
-## Desenvolvimento
-
 ### Type Checking (mypy)
 
 ```bash

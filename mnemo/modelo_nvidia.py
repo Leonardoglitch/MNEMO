@@ -60,10 +60,11 @@ class ClienteNVIDIA:
         self.timeout = timeout
         self.fallback_models = fallback_models if fallback_models is not None else [
             "nvidia/nemotron-3-super-120b-a12b",
-            "nvidia/nemotron-3-ultra",
+            "nvidia/nemotron-3-ultra-550b-a55b",
         ]
         self.max_retries = max_retries
         self.base_delay = base_delay
+        self._last_health_error: Optional[str] = None
 
     def _construir_pedido(self, corpo: Dict[str, Any]) -> urllib.request.Request:
         """Constrói o objeto Request para a API."""
@@ -111,8 +112,8 @@ class ClienteNVIDIA:
     def _deve_tentar_novamente(self, erro: Exception) -> bool:
         """Decide se vale a pena tentar novamente baseado no tipo de erro."""
         if isinstance(erro, urllib.error.HTTPError):
-            # Tentar novamente em erros 5xx (servidor) e 429 (rate limit)
-            return erro.code >= 500 or erro.code == 429
+            # Tentar novamente em erros 5xx (servidor), 429 (rate limit) e 404 (modelo inexistente -> fallback)
+            return erro.code >= 500 or erro.code == 429 or erro.code == 404
         if isinstance(erro, (urllib.error.URLError, TimeoutError)):
             return True
         return False
@@ -195,14 +196,21 @@ class ClienteNVIDIA:
             except (KeyError, IndexError):
                 continue
 
-    def health_check(self) -> bool:
-        """Verifica se a API está acessível com um pedido mínimo."""
+    def health_check(self) -> tuple[bool, Optional[str]]:
+        """Verifica se a API está acessível com um pedido mínimo.
+        
+        Returns:
+            tuple: (sucesso, mensagem_erro) - sucesso é True se OK, False caso contrário;
+                   mensagem_erro contém detalhes se falhou, None se sucesso.
+        """
+        self._last_health_error = None
         try:
             self._pedido_json({
                 "model": self.modelo,
                 "messages": [{"role": "user", "content": "ping"}],
                 "max_tokens": 1,
             })
-            return True
-        except Exception:
-            return False
+            return True, None
+        except Exception as e:
+            self._last_health_error = str(e)
+            return False, str(e)

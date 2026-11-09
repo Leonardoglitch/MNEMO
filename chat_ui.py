@@ -597,9 +597,9 @@ class ChatUI:
         selected_index = [0]  # mutable para closure
         result: List[Optional[str]] = [None]  # para capturar resultado
 
-        def get_formatted_text() -> Any:
+        def get_formatted_text() -> StyleAndTextTuples:
             """Gera texto formatado para a lista."""
-            result_text: List[Tuple[str, str]] = []
+            result_text: StyleAndTextTuples = []
             for i, (nome, preview) in enumerate(items):
                 if i == selected_index[0]:
                     result_text.append(("reverse", f"▶ {nome} — {preview}\n"))

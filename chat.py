@@ -25,6 +25,7 @@ import os
 import signal
 import sys
 import time
+from pathlib import Path
 from typing import List, Dict, Any, Callable, Tuple, Optional
 
 from mnemo import FerramentasVault, TokenCounter, PermissaoNegada
@@ -63,15 +64,21 @@ INSTRUCAO_SISTEMA = (
 
 
 def carregar_env(caminho: str = ".env") -> None:
-    """Lê pares CHAVE=VALOR de um .env simples, sem depender de bibliotecas externas."""
+    """Lê pares CHAVE=VALOR de um .env simples, sem depender de bibliotecas externas.
+    
+    Usa caminho absoluto relativo ao script, remove BOM se houver, e sobrescreve
+    variáveis de ambiente existentes (não usa setdefault).
+    """
+    if not Path(caminho).is_absolute():
+        caminho = str(Path(__file__).parent / caminho)
     try:
-        with open(caminho, encoding="utf-8") as f:
+        with open(caminho, encoding="utf-8-sig") as f:  # utf-8-sig remove BOM automaticamente
             for linha in f:
                 linha = linha.strip()
                 if not linha or linha.startswith("#") or "=" not in linha:
                     continue
                 chave, valor = linha.split("=", 1)
-                os.environ.setdefault(chave.strip(), valor.strip().strip("'\""))
+                os.environ[chave.strip()] = valor.strip().strip("'\"")
     except FileNotFoundError:
         pass
 
@@ -266,17 +273,23 @@ def main() -> None:
 
         # Health check rápido com retry (3 tentativas, 1s intervalo)
         health_ok = False
+        health_error: Optional[str] = None
         for _ in range(3):
             try:
-                if cliente.health_check():
+                ok, err = cliente.health_check()
+                if ok:
                     health_ok = True
                     break
-            except Exception:
-                pass
+                health_error = err
+            except Exception as e:
+                health_error = str(e)
             time.sleep(1)
         
         if not health_ok:
-            ui.print_error("Health check falhou — API indisponível.")
+            msg = "Health check falhou — API indisponível."
+            if health_error:
+                msg += f" Detalhe: {health_error}"
+            ui.print_error(msg)
             sys.exit(1)
 
         mensagens = [{"role": "system", "content": INSTRUCAO_SISTEMA}]

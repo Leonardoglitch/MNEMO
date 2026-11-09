@@ -273,7 +273,9 @@ def test_health_check_sucesso(monkeypatch):
     monkeypatch.setattr(mod.urllib.request, "urlopen", urlopen_ok)
 
     cliente = ClienteNVIDIA()
-    assert cliente.health_check() is True
+    ok, err = cliente.health_check()
+    assert ok is True
+    assert err is None
 
 
 def test_health_check_falha(monkeypatch):
@@ -286,7 +288,9 @@ def test_health_check_falha(monkeypatch):
     monkeypatch.setattr(mod.urllib.request, "urlopen", urlopen_falha)
 
     cliente = ClienteNVIDIA()
-    assert cliente.health_check() is False
+    ok, err = cliente.health_check()
+    assert ok is False
+    assert err is not None
 
 
 def test_timeout_configuravel(monkeypatch):
