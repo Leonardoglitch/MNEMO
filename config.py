@@ -19,8 +19,7 @@ DEFAULTS: Dict[str, Any] = {
     "auto_save": True,
     "max_history": 1000,
     "fallback_models": [
-        "nvidia/nemotron-3-super-120b-a12b",
-        "nvidia/nemotron-3-ultra-550b-a55b",
+        "nvidia/gpt-oss-20b",
     ],
     "show_tokens": True,                 # mostrar contador de tokens
 }

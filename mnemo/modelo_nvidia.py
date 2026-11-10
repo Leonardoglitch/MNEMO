@@ -59,8 +59,7 @@ class ClienteNVIDIA:
         self.ativar_pensamento = ativar_pensamento
         self.timeout = timeout
         self.fallback_models = fallback_models if fallback_models is not None else [
-            "nvidia/nemotron-3-super-120b-a12b",
-            "nvidia/nemotron-3-ultra-550b-a55b",
+            "nvidia/gpt-oss-20b",
         ]
         self.max_retries = max_retries
         self.base_delay = base_delay
