@@ -22,6 +22,7 @@ import argparse
 import ast
 import json
 import os
+import re
 import signal
 import sys
 import time
@@ -38,6 +39,27 @@ from rich.panel import Panel
 # Máximo de iterações de tool-calling por turno do utilizador
 # Previne loops infinitos se o modelo chamar ferramentas repetidamente
 MAX_CICLOS_FERRAMENTAS = 15
+
+
+def generate_instant_title(message: str) -> str | None:
+    """Extrai título instantâneo da 1.ª mensagem do utilizador (máx 30 palavras)."""
+    if not message or not message.strip():
+        return None
+    
+    # 1.ª linha com conteúdo
+    line = next((l.strip() for l in message.splitlines() if l.strip()), "")
+    line = " ".join(line.split())
+    
+    # Trunca a 30 palavras
+    words = line.split()
+    if len(words) > 30:
+        line = " ".join(words[:30])
+    
+    # Sanitiza para filename: remove / \ : * ? " < > | e substitui espaços por _
+    line = re.sub(r'[\\/:*?"<>|]', "", line)
+    line = line.replace(" ", "_")
+    return line or None
+
 
 INSTRUCAO_SISTEMA = (
     "És o assistente do Mnemo, uma plataforma pessoal de IA. Tens acesso a um "
@@ -163,11 +185,11 @@ def executar_ciclo_ferramentas(
     return "(demasiados pedidos de ferramentas seguidos — parei para não entrar em ciclo)", usage_acumulado
 
 
-def _salvar_historico(mensagens: List[Dict[str, Any]], raiz_vault: str, modelo: str = "") -> None:
-    """Grava histórico completo (incl. tool calls) em historico/YYYY-MM-DD_HH-MM.md
+def _salvar_historico(mensagens: List[Dict[str, Any]], raiz_vault: str, modelo: str = "", titulo: str | None = None) -> None:
+    """Grava histórico completo (incl. tool calls) em historico/YYYY-MM-DD_HH-MM[_titulo].md
     
     Formato do ficheiro:
-    - Cabeçalho com timestamp e modelo
+    - Cabeçalho com timestamp, modelo e título (se houver)
     - Mensagens do utilizador e assistente (ignora system)
     - Tool calls e resultados formatados em Markdown
     - Guardado como nota na pasta historico/ via FerramentasVault
@@ -176,9 +198,10 @@ def _salvar_historico(mensagens: List[Dict[str, Any]], raiz_vault: str, modelo: 
     from mnemo import FerramentasVault
 
     ts = datetime.now().strftime("%Y-%m-%d_%H-%M")
-    caminho = f"historico/{ts}.md"
+    sufixo = f"_{titulo}" if titulo else ""
+    caminho = f"historico/{ts}{sufixo}.md"
 
-    linhas = [f"# Conversa {ts}\n"]
+    linhas = [f"# {titulo or f'Conversa {ts}'}\n"]
     if modelo:
         linhas.append(f"**Modelo:** {modelo}\n")
     for m in mensagens:
@@ -203,7 +226,9 @@ def _salvar_historico(mensagens: List[Dict[str, Any]], raiz_vault: str, modelo: 
     conteudo = "\n".join(linhas)
 
     with FerramentasVault(raiz_vault) as v:
-        v.executar("create_note", {"caminho": caminho, "conteudo": conteudo})
+        resultado = v.executar("create_note", {"caminho": caminho, "conteudo": conteudo})
+        if not resultado.get("ok"):
+            raise RuntimeError(f"Falha ao gravar histórico: {resultado.get('erro', 'erro desconhecido')}")
 
 
 def main() -> None:
@@ -302,12 +327,16 @@ def main() -> None:
         
         ui.welcome(vault.armazenamento.perms.raiz.name, cliente.modelo)
 
+        # Título da conversa (extraído da 1.ª pergunta do utilizador)
+        conversa_titulo = None
+        primeira_msg = True
+
         while True:
             # Verifica se foi pedido shutdown (signal handler ou except)
             if shutdown_requested:
                 if ui.confirm("\nSair e gravar histórico?"):
                     ui.console.print("\n[Saindo... a gravar histórico]")
-                    _salvar_historico(mensagens, vault_path, cliente.modelo)
+                    _salvar_historico(mensagens, vault_path, cliente.modelo, conversa_titulo)
                     break
                 else:
                     ui.console.print("[info]Continuando...[/info]")
@@ -332,11 +361,11 @@ def main() -> None:
             low = texto.lower()
             if low in {"sair", "exit", "quit"}:
                 ui.console.print("[Saindo... a gravar histórico]")
-                _salvar_historico(mensagens, vault_path, cliente.modelo)
+                _salvar_historico(mensagens, vault_path, cliente.modelo, conversa_titulo)
                 break
 
             if texto == "/salvar":
-                _salvar_historico(mensagens, vault_path, cliente.modelo)
+                _salvar_historico(mensagens, vault_path, cliente.modelo, conversa_titulo)
                 ui.console.print("[success]Conversa gravada em historico/[/success]\n")
                 continue
 
@@ -363,7 +392,7 @@ def main() -> None:
                     elif parts[i] == "--model" and i + 1 < len(parts):
                         model = parts[i + 1]
                         i += 2
-                    elif parts[i] in ("search", "load", "export", "import"):
+                    elif parts[i] in ("search", "load", "export", "import", "limpar"):
                         subcommand = parts[i]
                         if i + 1 < len(parts):
                             subcommand_arg = parts[i + 1]
@@ -382,6 +411,20 @@ def main() -> None:
                     ui.export_history(vault_path, subcommand_arg, since=since, until=until, model=model)
                 elif subcommand == "import" and subcommand_arg:
                     ui.import_history(vault_path, subcommand_arg)
+                elif subcommand == "limpar":
+                    if not ui.confirm("Apagar TODO o histórico? Esta ação não pode ser desfeita."):
+                        continue
+                    try:
+                        with FerramentasVault(vault_path) as ferramentas:
+                            resultado = ferramentas.executar("list_files", {"pasta": "historico"})
+                            if resultado["ok"] and resultado["notas"]:
+                                for nota in resultado["notas"]:
+                                    ferramentas.executar("delete_note", {"caminho": nota["caminho"]})
+                                ui.console.print(f"[success]Histórico limpo: {len(resultado['notas'])} sessões eliminadas.[/success]")
+                            else:
+                                ui.console.print("[muted]Histórico já está vazio.[/muted]")
+                    except Exception as e:
+                        ui.console.print(f"[error]Erro ao limpar histórico: {e}[/error]")
                 elif subcommand is None:
                     # Modo interativo (TUI) ou lista simples
                     if since or until or model:
@@ -469,6 +512,8 @@ def main() -> None:
                 # Nova conversa: mantém system message, limpa o resto
                 mensagens = [{"role": "system", "content": INSTRUCAO_SISTEMA}]
                 token_counter = TokenCounter()
+                conversa_titulo = None
+                primeira_msg = True
                 ui.console.print("[success]Nova conversa iniciada.[/success]\n")
                 continue
 
@@ -534,7 +579,8 @@ def main() -> None:
                     "  list_files projetos/              # Lista pasta\n\n"
                     "CONVERSA\n"
                     "  /new                  # Nova conversa (limpa histórico atual)\n"
-                    "  /delete <id>          # Elimina sessão do histórico\n\n"
+                    "  /delete <id>          # Elimina sessão do histórico\n"
+                    "  /historico limpar     # Apaga TODO o histórico (confirmação)\n\n"
                     "OUTROS\n"
                     "  /salvar              # Checkpoint em historico/\n"
                     "  /limpar              # Limpa ecrã\n"
@@ -624,6 +670,12 @@ def main() -> None:
 
             # Mensagem normal do utilizador -> adiciona ao histórico e processa
             mensagens.append({"role": "user", "content": texto})
+            
+            # Captura título da 1.ª mensagem (se não for comando)
+            if primeira_msg:
+                conversa_titulo = generate_instant_title(texto)
+                primeira_msg = False
+            
             try:
                 with ui.thinking():
                     resposta_texto, usage = executar_ciclo_ferramentas(

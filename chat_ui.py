@@ -587,12 +587,16 @@ class ChatUI:
             try:
                 txt = f.read_text(encoding="utf-8")
                 linhas_txt = txt.split("\n")[1:4]
-                preview = " ".join(p.strip() for p in linhas_txt if p.strip())
+                # Remove linhas com "**Modelo:**" do preview
+                linhas_filtradas = [p.strip() for p in linhas_txt if p.strip() and not p.strip().startswith("**Modelo:**")]
+                preview = " ".join(linhas_filtradas)
                 if len(preview) > 100:
                     preview = preview[:97] + "..."
             except Exception:
                 preview = "(erro ao ler)"
-            items.append((f.name, preview))
+            # Remove .md do nome mostrado
+            nome_sem_md = f.stem
+            items.append((nome_sem_md, preview))
 
         selected_index = [0]  # mutable para closure
         result: List[Optional[str]] = [None]  # para capturar resultado

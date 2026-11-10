@@ -105,6 +105,15 @@ class Indexador:
         self.caminho_db.parent.mkdir(parents=True, exist_ok=True)
         self.con = sqlite3.connect(self.caminho_db)
         self.con.executescript(_ESQUEMA)
+        self._migrar_schema()
+
+    def _migrar_schema(self) -> None:
+        """Adiciona colunas/tabelas em falta em bases de dados antigas."""
+        # Adiciona coluna tags se não existir (migração v1 -> v2)
+        cols = {row[1] for row in self.con.execute("PRAGMA table_info(notas)")}
+        if "tags" not in cols:
+            self.con.execute("ALTER TABLE notas ADD COLUMN tags TEXT DEFAULT '[]'")
+            self.con.commit()
 
     # --- helpers internos ---
 
