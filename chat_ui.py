@@ -195,7 +195,9 @@ class ChatUI:
         # completer com comandos + pastas permitidas (será atualizado depois)
         base_commands = [
             "/salvar", "/historico", "/vault", "/modelo",
-            "/limpar", "/config", "/ajuda", "/status", "sair", "exit", "quit"
+            "/limpar", "/config", "/ajuda", "/status",
+            "/new", "/delete", "/historico limpar",
+            "sair", "exit", "quit"
         ]
         self._base_commands = base_commands
 
@@ -243,6 +245,7 @@ class ChatUI:
                 "Comandos: [prompt]/salvar[/prompt]  [prompt]/historico[/prompt]  "
                 "[prompt]/vault[/prompt]  [prompt]/modelo[/prompt]  "
                 "[prompt]/limpar[/prompt]  [prompt]/config[/prompt]  [prompt]/ajuda[/prompt]  "
+                "[prompt]/new[/prompt]  [prompt]/delete[/prompt]  "
                 "[prompt]sair[/prompt]",
                 title="Bem-vindo",
                 border_style="info",
