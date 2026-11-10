@@ -25,7 +25,6 @@ testpaths = ["tests"]
 
 [tool.mypy]
 strict = true
-python_version = "3.9"
 warn_unused_ignores = true
 warn_redundant_casts = true
 warn_unused_configs = true

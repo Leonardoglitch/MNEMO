@@ -64,7 +64,6 @@ class ClienteNVIDIA:
         ]
         self.max_retries = max_retries
         self.base_delay = base_delay
-        self._last_health_error: Optional[str] = None
 
     def _construir_pedido(self, corpo: Dict[str, Any]) -> urllib.request.Request:
         """Constrói o objeto Request para a API."""
@@ -89,6 +88,14 @@ class ClienteNVIDIA:
         with urllib.request.urlopen(self._construir_pedido(corpo), timeout=self.timeout) as resposta:
             yield from self._iter_stream(resposta)
 
+    def _abrir_stream(self, corpo: Dict[str, Any]) -> Any:
+        """Abre a ligação HTTP para streaming e retorna o objeto resposta.
+        
+        O chamador é responsável por fechar a resposta (usar como context manager).
+        Lança exceção se o pedido falhar (HTTPError, URLError, etc.).
+        """
+        return urllib.request.urlopen(self._construir_pedido(corpo), timeout=self.timeout)
+
     def _iter_stream(self, resposta: Iterable[bytes]) -> Generator[Dict[str, Any], None, None]:
         """Itera sobre resposta de streaming (Server-Sent Events)."""
         for linha_bruta in resposta:
@@ -112,8 +119,8 @@ class ClienteNVIDIA:
     def _deve_tentar_novamente(self, erro: Exception) -> bool:
         """Decide se vale a pena tentar novamente baseado no tipo de erro."""
         if isinstance(erro, urllib.error.HTTPError):
-            # Tentar novamente em erros 5xx (servidor), 429 (rate limit) e 404 (modelo inexistente -> fallback)
-            return erro.code >= 500 or erro.code == 429 or erro.code == 404
+            # Tentar novamente em erros 5xx (servidor) e 429 (rate limit)
+            return erro.code >= 500 or erro.code == 429
         if isinstance(erro, (urllib.error.URLError, TimeoutError)):
             return True
         return False
@@ -163,13 +170,18 @@ class ClienteNVIDIA:
 
                     # Tenta fazer o pedido
                     if stream:
-                        resultado_gen = self._pedido_stream(corpo)
-                        return self._processar_stream(resultado_gen)
+                        # Abre a ligação DENTRO do try/except para capturar erros HTTP
+                        resposta = self._abrir_stream(corpo)
+                        # Retorna generator que processa a resposta já aberta
+                        return self._processar_stream(self._iter_stream(resposta), resposta)
                     else:
                         resultado = self._pedido_json(corpo)
                         return self._extrair_mensagem(resultado)
 
                 except (urllib.error.HTTPError, urllib.error.URLError, TimeoutError) as e:
+                    # 404 = modelo inexistente: não faz retry, passa logo ao próximo modelo
+                    if isinstance(e, urllib.error.HTTPError) and e.code == 404:
+                        break
                     if not self._deve_tentar_novamente(e):
                         raise ErroModeloNVIDIA(f"Erro não recuperável: {e}") from e
                     # Se não é a última tentativa, espera e tenta novamente
@@ -186,15 +198,21 @@ class ClienteNVIDIA:
 
         raise ErroModeloNVIDIA(f"Todos os modelos falharam após {self.max_retries} tentativas cada.")
 
-    def _processar_stream(self, generator: Generator[Dict[str, Any], None, None]) -> Generator[Dict[str, Any], None, None]:
-        """Processa stream de chunks e yield mensagens incrementais."""
-        for chunk in generator:
-            try:
-                delta = chunk["choices"][0].get("delta", {})
-                if delta:
-                    yield {"delta": delta}
-            except (KeyError, IndexError):
-                continue
+    def _processar_stream(self, generator: Generator[Dict[str, Any], None, None], resposta: Any) -> Generator[Dict[str, Any], None, None]:
+        """Processa stream de chunks e yield mensagens incrementais.
+        
+        Fecha a resposta HTTP quando o generator é esgotado ou fechado.
+        """
+        try:
+            for chunk in generator:
+                try:
+                    delta = chunk["choices"][0].get("delta", {})
+                    if delta:
+                        yield {"delta": delta}
+                except (KeyError, IndexError):
+                    continue
+        finally:
+            resposta.close()
 
     def health_check(self) -> tuple[bool, Optional[str]]:
         """Verifica se a API está acessível com um pedido mínimo.
@@ -203,7 +221,6 @@ class ClienteNVIDIA:
             tuple: (sucesso, mensagem_erro) - sucesso é True se OK, False caso contrário;
                    mensagem_erro contém detalhes se falhou, None se sucesso.
         """
-        self._last_health_error = None
         try:
             self._pedido_json({
                 "model": self.modelo,
@@ -212,5 +229,4 @@ class ClienteNVIDIA:
             })
             return True, None
         except Exception as e:
-            self._last_health_error = str(e)
             return False, str(e)

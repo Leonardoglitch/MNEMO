@@ -140,6 +140,7 @@ class RespostaFalsaStream:
     def __init__(self, chunks):
         self.chunks = chunks
         self.index = 0
+        self.closed = False
 
     def __iter__(self):
         return self
@@ -157,6 +158,9 @@ class RespostaFalsaStream:
 
     def __exit__(self, *_):
         return False
+
+    def close(self):
+        self.closed = True
 
 
 def test_retry_em_erro_5xx(monkeypatch):
