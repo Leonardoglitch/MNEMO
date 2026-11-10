@@ -42,7 +42,8 @@ MAX_CICLOS_FERRAMENTAS = 15
 INSTRUCAO_SISTEMA = (
     "És o assistente do Mnemo, uma plataforma pessoal de IA. Tens acesso a um "
     "conjunto de notas (o Vault) através das ferramentas search, read_note, "
-    "create_note, append_to_note e list_files. Usa-as sempre que precisares de "
+    "create_note, append_to_note, list_files, tag_note, search_by_tag, list_tags e delete_note. "
+    "Usa-as sempre que precisares de "
     "consultar ou guardar informação nas notas do utilizador — nunca inventes o "
     "conteúdo de uma nota que não leste. Responde sempre em português.\n\n"
     "Regras para create_note:\n"
@@ -59,6 +60,8 @@ INSTRUCAO_SISTEMA = (
     "- `/modelo` — troca modelo\n"
     "- `/limpar` — limpa ecrã\n"
     "- `/config` — mostra/altera configuração\n"
+    "- `/new` — inicia nova conversa (limpa histórico atual)\n"
+    "- `/delete <id>` — elimina uma sessão do histórico\n"
     "- Ao sair, o histórico é gravado automaticamente em historico/\n"
 )
 
@@ -462,6 +465,32 @@ def main() -> None:
                 ui.clear()
                 continue
 
+            if texto == "/new":
+                # Nova conversa: mantém system message, limpa o resto
+                mensagens = [{"role": "system", "content": INSTRUCAO_SISTEMA}]
+                token_counter = TokenCounter()
+                ui.console.print("[success]Nova conversa iniciada.[/success]\n")
+                continue
+
+            if texto.startswith("/delete"):
+                parts = shlex.split(texto)
+                if len(parts) < 2:
+                    ui.console.print("[warning]Uso:[/warning] /delete <id_da_sessao>")
+                    ui.console.print("[muted]Use /historico para ver IDs disponíveis.[/muted]")
+                    continue
+                session_id = parts[1]
+                try:
+                    with FerramentasVault(vault_path) as ferramentas:
+                        # Tenta apagar o ficheiro de histórico
+                        resultado = ferramentas.executar("delete_note", {"caminho": f"historico/{session_id}.md"})
+                        if resultado["ok"]:
+                            ui.console.print(f"[success]Sessão {session_id} eliminada.[/success]")
+                        else:
+                            ui.console.print(f"[error]{resultado['erro']}[/error]")
+                except Exception as e:
+                    ui.console.print(f"[error]Erro ao eliminar sessão: {e}[/error]")
+                continue
+
             if texto == "/status":
                 ui.show_status(vault_path, cliente, config)
                 continue
@@ -503,6 +532,9 @@ def main() -> None:
                     "  append_to_note projetos/plano.md  # Anexa conteúdo\n"
                     "  search python                     # Busca semântica\n"
                     "  list_files projetos/              # Lista pasta\n\n"
+                    "CONVERSA\n"
+                    "  /new                  # Nova conversa (limpa histórico atual)\n"
+                    "  /delete <id>          # Elimina sessão do histórico\n\n"
                     "OUTROS\n"
                     "  /salvar              # Checkpoint em historico/\n"
                     "  /limpar              # Limpa ecrã\n"

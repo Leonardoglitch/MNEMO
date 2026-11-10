@@ -108,6 +108,17 @@ class FerramentasVault:
                 "required": [],
             },
         },
+        {
+            "name": "delete_note",
+            "description": "Apaga uma nota (move para .lixo/). O caminho deve ser relativo a notas/ (ex.: 'historico/2026-09-27_12-34.md').",
+            "input_schema": {
+                "type": "object",
+                "properties": {
+                    "caminho": {"type": "string", "description": "Caminho relativo dentro de notas/ (ex.: 'historico/2026-09-27_12-34.md')"}
+                },
+                "required": ["caminho"],
+            },
+        },
     ]
 
     def __init__(self, raiz_vault: str) -> None:
@@ -142,6 +153,8 @@ class FerramentasVault:
                 return self._search_by_tag(argumentos)
             if nome == "list_tags":
                 return self._list_tags(argumentos)
+            if nome == "delete_note":
+                return self._delete_note(argumentos)
             return {"ok": False, "erro": f"Ferramenta desconhecida: {nome}"}
         except PermissaoNegada as e:
             return {"ok": False, "erro": str(e)}
@@ -325,3 +338,14 @@ class FerramentasVault:
             return {"ok": True, "tags": tags, "total": len(tags)}
         except Exception as e:
             return {"ok": False, "erro": f"Erro ao listar tags: {e}"}
+
+    def _delete_note(self, args: Dict[str, Any]) -> Dict[str, Any]:
+        """Apaga uma nota (move para .lixo/)."""
+        caminho = args["caminho"]
+        try:
+            destino = self.armazenamento.apagar(caminho)
+            return {"ok": True, "caminho": caminho, "movida_para": str(destino)}
+        except FileNotFoundError:
+            return {"ok": False, "erro": "Nota não encontrada.", "sugestao": "create_note"}
+        except Exception as e:
+            return {"ok": False, "erro": f"Erro ao apagar nota: {e}"}
