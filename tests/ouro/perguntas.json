@@ -1,152 +1,192 @@
 [
   {
-    "pergunta": "Que base de dados escolhi para o projeto?",
-    "esperadas": ["notas/decisoes-bd.md"],
+    "pergunta": "O que é RAG?",
+    "esperadas": ["estudo/rag-conceitos.md"],
     "tipo": "termo_exato"
   },
   {
-    "pergunta": "Qual o modelo de embeddings configurado?",
-    "esperadas": ["notas/config-embeddings.md"],
+    "pergunta": "Conceitos de RAG",
+    "esperadas": ["estudo/rag-conceitos.md"],
     "tipo": "termo_exato"
   },
   {
-    "pergunta": "Como se chama o projeto principal?",
-    "esperadas": ["notas/projeto-pap.md"],
+    "pergunta": "O que são variáveis e loops em Python?",
+    "esperadas": ["estudo/python-basico.md"],
     "tipo": "termo_exato"
   },
   {
-    "pergunta": "Onde guardei a nota sobre RAG?",
-    "esperadas": ["notas/estudo/rag-conceitos.md"],
+    "pergunta": "Python básico: variáveis loops funções",
+    "esperadas": ["estudo/python-basico.md"],
     "tipo": "termo_exato"
   },
   {
-    "pergunta": "Quais as pastas permitidas no vault?",
-    "esperadas": ["notas/config-vault.md"],
+    "pergunta": "Quais são as tarefas do projeto?",
+    "esperadas": ["projetos/tarefas.md"],
     "tipo": "termo_exato"
   },
   {
-    "pergunta": "Explique o conceito de RAG em poucas palavras",
-    "esperadas": ["notas/estudo/rag-conceitos.md"],
-    "tipo": "parafrase"
-  },
-  {
-    "pergunta": "Como funciona a busca semântica no Mnemo?",
-    "esperadas": ["notas/arquitetura-busca.md", "notas/indexador.md"],
-    "tipo": "parafrase"
-  },
-  {
-    "pergunta": "Qual a diferença entre BM25 e embeddings?",
-    "esperadas": ["notas/bm25-vs-embeddings.md"],
-    "tipo": "parafrase"
-  },
-  {
-    "pergunta": "Como o sistema lida com permissões de pastas?",
-    "esperadas": ["notas/permissoes.md"],
-    "tipo": "parafrase"
-  },
-  {
-    "pergunta": "O que acontece quando edito uma nota?",
-    "esperadas": ["notas/armazenamento.md", "notas/indexador.md"],
-    "tipo": "parafrase"
-  },
-  {
-    "pergunta": "Como configurar o modelo padrão do chat?",
-    "esperadas": ["notas/config-modelo.md"],
+    "pergunta": "Tarefas: configurar repositório criar vault",
+    "esperadas": ["projetos/tarefas.md"],
     "tipo": "termo_exato"
   },
   {
-    "pergunta": "Para que serve a tabela meta no SQLite?",
-    "esperadas": ["notas/esquema-sqlite.md"],
+    "pergunta": "Qual o orçamento mensal para despesas variáveis?",
+    "esperadas": ["pessoal/orcamento-pessoal.md"],
     "tipo": "termo_exato"
   },
   {
-    "pergunta": "Como o Retain detecta alterações nas notas?",
-    "esperadas": ["notas/retain.md"],
-    "tipo": "parafrase"
-  },
-  {
-    "pergunta": "O que é RRF e como funciona a fusão?",
-    "esperadas": ["notas/rrf.md"],
-    "tipo": "parafrase"
-  },
-  {
-    "pergunta": "Como funciona o chunking das notas?",
-    "esperadas": ["notas/chunker.md"],
-    "tipo": "parafrase"
-  },
-  {
-    "pergunta": "Qual o token budget padrão para recall?",
-    "esperadas": ["notas/config-recall.md"],
+    "pergunta": "Orçamento pessoal 1500 euros",
+    "esperadas": ["pessoal/orcamento-pessoal.md"],
     "tipo": "termo_exato"
   },
   {
-    "pergunta": "Como o sistema evita memórias duplicadas?",
-    "esperadas": ["notas/deduplicacao.md"],
+    "pergunta": "O que é Retrieval-Augmented Generation?",
+    "esperadas": ["estudo/rag-conceitos.md"],
     "tipo": "parafrase"
   },
   {
-    "pergunta": "O que são rascunhos na memória?",
-    "esperadas": ["notas/rascunhos.md"],
+    "pergunta": "Como funciona busca aumentada com geração?",
+    "esperadas": ["estudo/rag-conceitos.md"],
+    "tipo": "parafrase"
+  },
+  {
+    "pergunta": "Explique conceitos básicos de Python",
+    "esperadas": ["estudo/python-basico.md"],
+    "tipo": "parafrase"
+  },
+  {
+    "pergunta": "Fundamentos de programação em Python",
+    "esperadas": ["estudo/python-basico.md"],
+    "tipo": "parafrase"
+  },
+  {
+    "pergunta": "O que está planeado para o projeto?",
+    "esperadas": ["projetos/tarefas.md"],
+    "tipo": "parafrase"
+  },
+  {
+    "pergunta": "Próximos passos do projeto",
+    "esperadas": ["projetos/tarefas.md"],
+    "tipo": "parafrase"
+  },
+  {
+    "pergunta": "Como gerir finanças pessoais mensais?",
+    "esperadas": ["pessoal/orcamento-pessoal.md"],
+    "tipo": "parafrase"
+  },
+  {
+    "pergunta": "Controlo de despesas variáveis",
+    "esperadas": ["pessoal/orcamento-pessoal.md"],
+    "tipo": "parafrase"
+  },
+  {
+    "pergunta": "O que é SQLite e para que serve?",
+    "esperadas": ["estudo/sqlite-notas.md"],
     "tipo": "termo_exato"
   },
   {
-    "pergunta": "Como o verificador de citações funciona?",
-    "esperadas": ["notas/verificador-citacoes.md"],
-    "tipo": "parafrase"
-  },
-  {
-    "pergunta": "Como reindexar todo o vault?",
-    "esperadas": ["notas/reindexar.md"],
+    "pergunta": "SQLite notas banco de dados",
+    "esperadas": ["estudo/sqlite-notas.md"],
     "tipo": "termo_exato"
   },
   {
-    "pergunta": "O que acontece se a API de embeddings falhar?",
-    "esperadas": ["notas/degradacao-graciosa.md"],
+    "pergunta": "Como funciona uma base de dados leve?",
+    "esperadas": ["estudo/sqlite-notas.md"],
     "tipo": "parafrase"
   },
   {
-    "pergunta": "Como funcionam os fallbacks de modelo?",
-    "esperadas": ["notas/fallback-modelos.md"],
+    "pergunta": "Banco de dados em arquivo único",
+    "esperadas": ["estudo/sqlite-notas.md"],
+    "tipo": "parafrase"
+  },
+  {
+    "pergunta": "O que são compras pessoais?",
+    "esperadas": ["pessoal/compras.md"],
     "tipo": "termo_exato"
   },
   {
-    "pergunta": "Qual a estrutura da tabela trechos?",
-    "esperadas": ["notas/esquema-trechos.md"],
+    "pergunta": "Lista de compras supermercado",
+    "esperadas": ["pessoal/compras.md"],
     "tipo": "termo_exato"
   },
   {
-    "pergunta": "Como o hash do trecho é calculado?",
-    "esperadas": ["notas/hash-trecho.md"],
+    "pergunta": "Como organizar compras da semana?",
+    "esperadas": ["pessoal/compras.md"],
+    "tipo": "parafrase"
+  },
+  {
+    "pergunta": "Planeamento de refeições e compras",
+    "esperadas": ["pessoal/compras.md"],
+    "tipo": "parafrase"
+  },
+  {
+    "pergunta": "Ideias para nova aplicação",
+    "esperadas": ["projetos/ideia-app.md"],
     "tipo": "termo_exato"
   },
   {
-    "pergunta": "O que é o prefixo 'Título › Secção' nos embeddings?",
-    "esperadas": ["notas/prefixo-embedding.md"],
-    "tipo": "parafrase"
-  },
-  {
-    "pergunta": "Como medir a qualidade do recall?",
-    "esperadas": ["notas/metricas-recall.md"],
-    "tipo": "parafrase"
-  },
-  {
-    "pergunta": "O que significa 'degradação graciosa' no recall?",
-    "esperadas": ["notas/degradacao-graciosa.md"],
-    "tipo": "parafrase"
-  },
-  {
-    "pergunta": "Como o sistema garante privacidade nos embeddings?",
-    "esperadas": ["notas/privacidade-embeddings.md"],
-    "tipo": "parafrase"
-  },
-  {
-    "pergunta": "Como funcionam as tags no frontmatter?",
-    "esperadas": ["notas/tags-frontmatter.md"],
+    "pergunta": "Conceito de app móvel",
+    "esperadas": ["projetos/ideia-app.md"],
     "tipo": "termo_exato"
   },
   {
-    "pergunta": "Qual a diferença entre 'facto' e 'opinião' no tipo de nota?",
-    "esperadas": ["notas/tipos-nota.md"],
+    "pergunta": "Como planear férias para 2027?",
+    "esperadas": ["projetos/plano-de-ferias2027.md"],
+    "tipo": "termo_exato"
+  },
+  {
+    "pergunta": "Férias planeamento orçamento destino",
+    "esperadas": ["projetos/plano-de-ferias2027.md"],
+    "tipo": "termo_exato"
+  },
+  {
+    "pergunta": "Organizar viagem de férias",
+    "esperadas": ["projetos/plano-de-ferias2027.md"],
+    "tipo": "parafrase"
+  },
+  {
+    "pergunta": "Escolher destino e orçamento de férias",
+    "esperadas": ["projetos/plano-de-ferias2027.md"],
+    "tipo": "parafrase"
+  },
+  {
+    "pergunta": "O que são presentes a comprar?",
+    "esperadas": ["pessoal/presentes.md"],
+    "tipo": "termo_exato"
+  },
+  {
+    "pergunta": "Lista de presentes aniversário natal",
+    "esperadas": ["pessoal/presentes.md"],
+    "tipo": "termo_exato"
+  },
+  {
+    "pergunta": "Ideias de presentes para família",
+    "esperadas": ["pessoal/presentes.md"],
+    "tipo": "parafrase"
+  },
+  {
+    "pergunta": "Sugestões de presentes personalizados",
+    "esperadas": ["pessoal/presentes.md"],
+    "tipo": "parafrase"
+  },
+  {
+    "pergunta": "Orçamento de projeto estimativa custos",
+    "esperadas": ["projetos/orcamento.md"],
+    "tipo": "termo_exato"
+  },
+  {
+    "pergunta": "Planeamento financeiro de projeto",
+    "esperadas": ["projetos/orcamento.md"],
+    "tipo": "parafrase"
+  },
+  {
+    "pergunta": "Conceitos de PAP projeto aplicação profissional",
+    "esperadas": ["estudo/pap-conceito.md"],
+    "tipo": "termo_exato"
+  },
+  {
+    "pergunta": "Projeto de Aplicação Profissional estrutura",
+    "esperadas": ["estudo/pap-conceito.md"],
     "tipo": "parafrase"
   }
 ]
