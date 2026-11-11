@@ -1,0 +1,152 @@
+[
+  {
+    "pergunta": "Que base de dados escolhi para o projeto?",
+    "esperadas": ["notas/decisoes-bd.md"],
+    "tipo": "termo_exato"
+  },
+  {
+    "pergunta": "Qual o modelo de embeddings configurado?",
+    "esperadas": ["notas/config-embeddings.md"],
+    "tipo": "termo_exato"
+  },
+  {
+    "pergunta": "Como se chama o projeto principal?",
+    "esperadas": ["notas/projeto-pap.md"],
+    "tipo": "termo_exato"
+  },
+  {
+    "pergunta": "Onde guardei a nota sobre RAG?",
+    "esperadas": ["notas/estudo/rag-conceitos.md"],
+    "tipo": "termo_exato"
+  },
+  {
+    "pergunta": "Quais as pastas permitidas no vault?",
+    "esperadas": ["notas/config-vault.md"],
+    "tipo": "termo_exato"
+  },
+  {
+    "pergunta": "Explique o conceito de RAG em poucas palavras",
+    "esperadas": ["notas/estudo/rag-conceitos.md"],
+    "tipo": "parafrase"
+  },
+  {
+    "pergunta": "Como funciona a busca semântica no Mnemo?",
+    "esperadas": ["notas/arquitetura-busca.md", "notas/indexador.md"],
+    "tipo": "parafrase"
+  },
+  {
+    "pergunta": "Qual a diferença entre BM25 e embeddings?",
+    "esperadas": ["notas/bm25-vs-embeddings.md"],
+    "tipo": "parafrase"
+  },
+  {
+    "pergunta": "Como o sistema lida com permissões de pastas?",
+    "esperadas": ["notas/permissoes.md"],
+    "tipo": "parafrase"
+  },
+  {
+    "pergunta": "O que acontece quando edito uma nota?",
+    "esperadas": ["notas/armazenamento.md", "notas/indexador.md"],
+    "tipo": "parafrase"
+  },
+  {
+    "pergunta": "Como configurar o modelo padrão do chat?",
+    "esperadas": ["notas/config-modelo.md"],
+    "tipo": "termo_exato"
+  },
+  {
+    "pergunta": "Para que serve a tabela meta no SQLite?",
+    "esperadas": ["notas/esquema-sqlite.md"],
+    "tipo": "termo_exato"
+  },
+  {
+    "pergunta": "Como o Retain detecta alterações nas notas?",
+    "esperadas": ["notas/retain.md"],
+    "tipo": "parafrase"
+  },
+  {
+    "pergunta": "O que é RRF e como funciona a fusão?",
+    "esperadas": ["notas/rrf.md"],
+    "tipo": "parafrase"
+  },
+  {
+    "pergunta": "Como funciona o chunking das notas?",
+    "esperadas": ["notas/chunker.md"],
+    "tipo": "parafrase"
+  },
+  {
+    "pergunta": "Qual o token budget padrão para recall?",
+    "esperadas": ["notas/config-recall.md"],
+    "tipo": "termo_exato"
+  },
+  {
+    "pergunta": "Como o sistema evita memórias duplicadas?",
+    "esperadas": ["notas/deduplicacao.md"],
+    "tipo": "parafrase"
+  },
+  {
+    "pergunta": "O que são rascunhos na memória?",
+    "esperadas": ["notas/rascunhos.md"],
+    "tipo": "termo_exato"
+  },
+  {
+    "pergunta": "Como o verificador de citações funciona?",
+    "esperadas": ["notas/verificador-citacoes.md"],
+    "tipo": "parafrase"
+  },
+  {
+    "pergunta": "Como reindexar todo o vault?",
+    "esperadas": ["notas/reindexar.md"],
+    "tipo": "termo_exato"
+  },
+  {
+    "pergunta": "O que acontece se a API de embeddings falhar?",
+    "esperadas": ["notas/degradacao-graciosa.md"],
+    "tipo": "parafrase"
+  },
+  {
+    "pergunta": "Como funcionam os fallbacks de modelo?",
+    "esperadas": ["notas/fallback-modelos.md"],
+    "tipo": "termo_exato"
+  },
+  {
+    "pergunta": "Qual a estrutura da tabela trechos?",
+    "esperadas": ["notas/esquema-trechos.md"],
+    "tipo": "termo_exato"
+  },
+  {
+    "pergunta": "Como o hash do trecho é calculado?",
+    "esperadas": ["notas/hash-trecho.md"],
+    "tipo": "termo_exato"
+  },
+  {
+    "pergunta": "O que é o prefixo 'Título › Secção' nos embeddings?",
+    "esperadas": ["notas/prefixo-embedding.md"],
+    "tipo": "parafrase"
+  },
+  {
+    "pergunta": "Como medir a qualidade do recall?",
+    "esperadas": ["notas/metricas-recall.md"],
+    "tipo": "parafrase"
+  },
+  {
+    "pergunta": "O que significa 'degradação graciosa' no recall?",
+    "esperadas": ["notas/degradacao-graciosa.md"],
+    "tipo": "parafrase"
+  },
+  {
+    "pergunta": "Como o sistema garante privacidade nos embeddings?",
+    "esperadas": ["notas/privacidade-embeddings.md"],
+    "tipo": "parafrase"
+  },
+  {
+    "pergunta": "Como funcionam as tags no frontmatter?",
+    "esperadas": ["notas/tags-frontmatter.md"],
+    "tipo": "termo_exato"
+  },
+  {
+    "pergunta": "Qual a diferença entre 'facto' e 'opinião' no tipo de nota?",
+    "esperadas": ["notas/tipos-nota.md"],
+    "tipo": "parafrase"
+  }
+]
