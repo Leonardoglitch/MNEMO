@@ -112,7 +112,7 @@ def _partir_secao(
                 tokens_buffer = 0
             # Parte frase longa em pedaços de ~trecho_tokens_max
             palavras = frase.split()
-            chunk_palavras = []
+            chunk_palavras: List[str] = []
             chunk_tokens = 0
             for palavra in palavras:
                 t = estimar_tokens(palavra + " ", chars_por_token)

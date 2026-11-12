@@ -36,7 +36,7 @@ class Resultado:
     titulo_secao: str
     texto: str
     score: float
-    origem: dict[str, int]  # {"lex": rank, "sem": rank}
+    origem: dict[str, Any]  # {"lex": rank, "sem": rank, "explicar": {...}}
     citacao: str
     modo: str = "hibrido"  # "hibrido" | "lexical"
 

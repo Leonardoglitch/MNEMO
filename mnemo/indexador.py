@@ -9,6 +9,7 @@ volta a verificar as permissões em cada resultado. Assim, uma pasta que deixe
 de ser permitida deixa logo de aparecer, mesmo antes de reindexar.
 """
 
+import hashlib
 import json
 import re
 import sqlite3
@@ -23,7 +24,8 @@ CREATE TABLE IF NOT EXISTS notas (
     caminho       TEXT NOT NULL UNIQUE,   -- relativo a notas/, com '/'
     titulo        TEXT NOT NULL,
     modificado_ns INTEGER NOT NULL,
-    tags          TEXT DEFAULT '[]'       -- JSON array: '["tag1","tag2"]'
+    tags          TEXT DEFAULT '[]',       -- JSON array: '["tag1","tag2"]'
+    md5           TEXT                    -- hash do conteúdo para deteção de alterações
 );
 CREATE TABLE IF NOT EXISTS nota_tags (
     nota_id INTEGER REFERENCES notas(id) ON DELETE CASCADE,
@@ -34,6 +36,40 @@ CREATE INDEX IF NOT EXISTS idx_nota_tags_tag ON nota_tags(tag);
 CREATE VIRTUAL TABLE IF NOT EXISTS notas_fts USING fts5(
     titulo, conteudo,
     tokenize = 'unicode61 remove_diacritics 2'   -- "orcamento" acha "orçamento"
+);
+
+-- Tabela meta: chave-valor para versão, modelo, dimensões, etc.
+CREATE TABLE IF NOT EXISTS meta (
+    chave TEXT PRIMARY KEY,
+    valor TEXT
+);
+
+-- Trechos de notas (chunking)
+CREATE TABLE IF NOT EXISTS trechos (
+    id            INTEGER PRIMARY KEY,
+    nota_id       INTEGER NOT NULL REFERENCES notas(id) ON DELETE CASCADE,
+    ordem         INTEGER NOT NULL,
+    titulo_secao  TEXT,
+    texto         TEXT NOT NULL,
+    tokens        INTEGER NOT NULL,
+    hash          TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_trechos_nota ON trechos(nota_id);
+CREATE INDEX IF NOT EXISTS idx_trechos_hash ON trechos(hash);
+
+-- FTS5 para busca lexical por trechos
+CREATE VIRTUAL TABLE IF NOT EXISTS trechos_fts USING fts5(
+    texto, titulo_secao,
+    tokenize = 'unicode61 remove_diacritics 2'
+);  -- rowid = trechos.id, escrito na mesma transação
+
+-- Vetores de embeddings (chave composta: hash, modelo, dim)
+CREATE TABLE IF NOT EXISTS vetores (
+    hash      TEXT NOT NULL,
+    modelo    TEXT NOT NULL,
+    dim       INTEGER NOT NULL,
+    vetor     BLOB NOT NULL,  -- float32, normalizado L2=1
+    PRIMARY KEY (hash, modelo, dim)
 );
 """
 
@@ -113,7 +149,10 @@ class Indexador:
         cols = {row[1] for row in self.con.execute("PRAGMA table_info(notas)")}
         if "tags" not in cols:
             self.con.execute("ALTER TABLE notas ADD COLUMN tags TEXT DEFAULT '[]'")
-            self.con.commit()
+        if "md5" not in cols:
+            self.con.execute("ALTER TABLE notas ADD COLUMN md5 TEXT")
+            self.con.execute("CREATE INDEX IF NOT EXISTS idx_notas_md5 ON notas(md5)")
+        self.con.commit()
 
     # --- helpers internos ---
 
@@ -127,14 +166,15 @@ class Indexador:
         tags_json = json.dumps(tags, ensure_ascii=False)
         _, corpo = separar_frontmatter(conteudo)  # o frontmatter não polui os excertos
         mtime = alvo.stat().st_mtime_ns
+        md5 = hashlib.md5(conteudo.encode("utf-8")).hexdigest()
         linha = self.con.execute(
             "SELECT id FROM notas WHERE caminho = ?", (rel,)
         ).fetchone()
         if linha:
             nota_id = linha[0]
             self.con.execute(
-                "UPDATE notas SET titulo = ?, modificado_ns = ?, tags = ? WHERE id = ?",
-                (titulo, mtime, tags_json, nota_id),
+                "UPDATE notas SET titulo = ?, modificado_ns = ?, tags = ?, md5 = ? WHERE id = ?",
+                (titulo, mtime, tags_json, md5, nota_id),
             )
             self.con.execute("DELETE FROM notas_fts WHERE rowid = ?", (nota_id,))
             # Atualiza nota_tags: remove antigas, insere novas
@@ -146,8 +186,8 @@ class Indexador:
                 )
         else:
             cur = self.con.execute(
-                "INSERT INTO notas (caminho, titulo, modificado_ns, tags) VALUES (?, ?, ?, ?)",
-                (rel, titulo, mtime, tags_json),
+                "INSERT INTO notas (caminho, titulo, modificado_ns, tags, md5) VALUES (?, ?, ?, ?, ?)",
+                (rel, titulo, mtime, tags_json, md5),
             )
             nota_id = cur.lastrowid
             for tag in tags:
@@ -187,6 +227,46 @@ class Indexador:
                 if alvo.is_file():
                     validas[self._rel(alvo)] = alvo
         return validas
+
+    def ids_permitidos(self, tags: Optional[List[str]] = None, tipos: Optional[List[str]] = None) -> List[int]:
+        """Devolve IDs de notas permitidas (filtro por pastas + tags + tipos).
+        
+        Usado pelo Recall para filtrar ANTES das pesquisas.
+        """
+        # Começa com todas as notas permitidas por pastas
+        validas = self._notas_validas()
+        if not validas:
+            return []
+
+        # Obtém IDs das notas válidas
+        placeholders = ",".join("?" for _ in validas)
+        rows = self.con.execute(
+            f"SELECT id FROM notas WHERE caminho IN ({placeholders})",
+            list(validas.keys()),
+        ).fetchall()
+        ids = [r[0] for r in rows]
+
+        # Filtro adicional por tags
+        if tags:
+            tags_norm = [t.lower() for t in tags]
+            placeholders = ",".join("?" for _ in tags_norm)
+            query = f"""
+                SELECT nota_id FROM nota_tags
+                WHERE tag IN ({placeholders})
+                GROUP BY nota_id
+                HAVING COUNT(DISTINCT tag) = ?
+            """
+            params = list(tags_norm) + [len(tags_norm)]
+            rows = self.con.execute(query, params).fetchall()
+            tag_ids = {r[0] for r in rows}
+            ids = [i for i in ids if i in tag_ids]
+
+        # Filtro por tipos (frontmatter tipo:) - opcional
+        if tipos:
+            # TODO: implementar quando coluna tipo existir
+            pass
+
+        return ids
 
     # --- API pública ---
 

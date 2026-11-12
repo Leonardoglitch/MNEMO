@@ -8,7 +8,7 @@ import time
 import urllib.error
 import urllib.request
 from collections import OrderedDict
-from typing import Any, List, Optional, Protocol
+from typing import Any, List, Optional, Protocol, cast
 
 import numpy as np
 
@@ -53,8 +53,8 @@ class NvidiaEmbeddings:
         self.base_delay = base_delay
         self._dim_cache: Optional[int] = None
 
-    def _pedido(self, textos: List[str], input_type: str, dimensions: Optional[int]) -> dict:
-        corpo = {
+    def _pedido(self, textos: List[str], input_type: str, dimensions: Optional[int]) -> dict[str, Any]:
+        corpo: dict[str, Any] = {
             "model": self.modelo,
             "input": textos,
             "input_type": input_type,
@@ -74,7 +74,7 @@ class NvidiaEmbeddings:
             method="POST",
         )
         with urllib.request.urlopen(pedido, timeout=self.timeout) as resp:
-            return json.loads(resp.read().decode("utf-8"))
+            return cast(dict[str, Any], json.loads(resp.read().decode("utf-8")))
 
     def _deve_tentar_novamente(self, erro: Exception) -> bool:
         if isinstance(erro, urllib.error.HTTPError):
@@ -134,7 +134,7 @@ class NvidiaEmbeddings:
             return self._dim_cache
         # Descobre dimensão com uma chamada rápida
         vecs = self.embed(["teste"], input_type="passage")
-        return vecs.shape[1]
+        return int(vecs.shape[1])
 
 
 class FakeEmbeddings:

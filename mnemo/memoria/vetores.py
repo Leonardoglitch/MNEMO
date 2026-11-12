@@ -60,7 +60,7 @@ class IndiceVetorial:
         Retorna top-k (idx_local, score) onde idx_local é índice em self._hashes.
         Se indices_permitidos dado, só considera esses índices.
         """
-        if not self.pronto:
+        if not self.pronto or self._matriz is None:
             return []
 
         matriz = self._matriz
@@ -77,9 +77,10 @@ class IndiceVetorial:
 
         top_idx = np.argpartition(scores, -k)[-k:]
         top_idx = top_idx[np.argsort(scores[top_idx])[::-1]]
+        top_idx_list = top_idx.tolist()
 
         if indices_permitidos is not None:
             # Mapeia de volta para índices globais
-            top_idx = [indices_permitidos[i] for i in top_idx]
+            top_idx_list = [indices_permitidos[i] for i in top_idx_list]
 
-        return [(int(i), float(scores[i])) for i in top_idx]
+        return [(int(i), float(scores[i])) for i in top_idx_list]
