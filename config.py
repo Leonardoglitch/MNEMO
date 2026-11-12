@@ -22,6 +22,17 @@ DEFAULTS: Dict[str, Any] = {
         "nvidia/gpt-oss-20b",
     ],
     "show_tokens": True,                 # mostrar contador de tokens
+    # Memória (Retain/Recall/Reflect)
+    "NVIDIA_EMBED_MODEL": "nvidia/nemotron-3.5-embed-1b",
+    "dim_embeddings": 512,
+    "trecho_tokens": 300,
+    "candidatos": 50,
+    "pesos_rrf": "1.0,1.0",
+    "max_trechos_por_nota": 2,
+    "budget_tokens": 2000,
+    "chars_por_token": 3.5,
+    "memoria_auto": True,
+    "limiar_duplicado": 0.90,
 }
 
 

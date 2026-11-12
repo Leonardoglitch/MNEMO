@@ -31,7 +31,11 @@ from typing import List, Dict, Any, Callable, Tuple, Optional
 
 from mnemo import FerramentasVault, TokenCounter, PermissaoNegada
 from mnemo.modelo_nvidia import ClienteNVIDIA, ErroModeloNVIDIA
-
+from mnemo.memoria import (
+    Retain, Recall, Reflect,
+    NvidiaEmbeddings, IndiceVetorial,
+    estimar_tokens,
+)
 from config import Config, DEFAULTS
 from chat_ui import ChatUI
 from rich.panel import Panel
@@ -327,6 +331,51 @@ def main() -> None:
         
         ui.welcome(vault.armazenamento.perms.raiz.name, cliente.modelo)
 
+        # Inicializa subsistema de memória (Retain/Recall/Reflect)
+        memoria_auto = config.get("memoria_auto", True)
+        if memoria_auto:
+            provider = NvidiaEmbeddings(
+                modelo=config.get("NVIDIA_EMBED_MODEL"),
+                dimensions=config.get("dim_embeddings"),
+            )
+            indice = IndiceVetorial(config.get("dim_embeddings"))
+            # Carrega vetores existentes do índice
+            rows = vault.indexador.con.execute(
+                "SELECT hash, vetor FROM vetores WHERE modelo = ? AND dim = ?",
+                (provider.modelo, provider.dim),
+            ).fetchall()
+            if rows:
+                import numpy as np
+                hashes = [r[0] for r in rows]
+                vecs = np.vstack([np.frombuffer(r[1], dtype=np.float32) for r in rows])
+                indice.carregar(hashes, vecs)
+
+            retain = Retain(
+                vault.armazenamento.perms,
+                vault.armazenamento,
+                vault.indexador,
+                provider,
+                provider.modelo,
+                provider.dim,
+                trecho_tokens_alvo=config.get("trecho_tokens"),
+                chars_por_token=config.get("chars_por_token"),
+            )
+            recall = Recall(
+                vault.indexador,
+                vault.armazenamento.perms,
+                provider,
+                indice,
+                pesos_rrf=tuple(map(float, config.get("pesos_rrf", "1.0,1.0").split(","))),
+                candidatos_por_pesquisa=config.get("candidatos"),
+                max_trechos_por_nota=config.get("max_trechos_por_nota"),
+                chars_por_token=config.get("chars_por_token"),
+            )
+            reflect = Reflect()
+            ui.console.print("[info]Memória ativa (Retain/Recall/Reflect)[/info]")
+        else:
+            retain = recall = reflect = None
+            ui.console.print("[muted]Memória desativada (memoria_auto=false)[/muted]")
+
         # Título da conversa (extraído da 1.ª pergunta do utilizador)
         conversa_titulo = None
         primeira_msg = True
@@ -357,6 +406,16 @@ def main() -> None:
 
             if not texto:
                 continue
+
+            # Recall automático (memória) antes de processar a mensagem
+            contexto_memoria = None
+            if memoria_auto and recall and reflect:
+                budget = config.get("budget_tokens", 2000)
+                resultados = recall.recall(texto, k=8, budget_tokens=budget)
+                if resultados:
+                    contexto_memoria = reflect.construir_contexto(texto, resultados, budget)
+                    # Injeta contexto no system message temporariamente
+                    mensagens[0] = {"role": "system", "content": INSTRUCAO_SISTEMA + "\n\n" + reflect.formatar_para_prompt(contexto_memoria)}
 
             low = texto.lower()
             if low in {"sair", "exit", "quit"}:
@@ -646,6 +705,69 @@ def main() -> None:
                     ui.console.print("[warning]Uso:[/warning] /config  |  /config theme dark|light|auto  |  /config model <id>  |  /config vault <path>  |  /config timeout <seg>  |  /config fallback <model1,model2,...>  |  /config tokens on|off  |  /config reset")
                 continue
 
+            if texto.startswith("/memoria"):
+                if not memoria_auto:
+                    ui.console.print("[muted]Memória desativada (memoria_auto=false no config)[/muted]")
+                    continue
+                parts = shlex.split(texto)
+                if len(parts) == 1:
+                    # Status da memória
+                    ui.console.print("[info]Memória:[/info]")
+                    ui.console.print(f"  Modelo: {provider.modelo}")
+                    ui.console.print(f"  Dimensão: {provider.dim}")
+                    ui.console.print(f"  Vetores indexados: {indice.n}")
+                    ui.console.print(f"  Budget tokens: {config.get('budget_tokens')}")
+                    ui.console.print(f"  RRF pesos: {config.get('pesos_rrf')}")
+                    continue
+                sub = parts[1]
+                if sub == "reindex":
+                    ui.console.print("[info]Reindexando vault...[/info]")
+                    rel = retain.retain_vault()
+                    ui.console.print(f"  Novas: {rel.novas}, Atualizadas: {rel.atualizadas}, Inalteradas: {rel.inalteradas}, Removidas: {rel.removidas}")
+                    ui.console.print(f"  Trechos: {rel.trechos_novos}, Embeddings: {rel.embeddings_novos}")
+                    if rel.embeddings_pendentes:
+                        ui.console.print(f"  [warning]Embeddings pendentes: {len(rel.embeddings_pendentes)}[/warning]")
+                    # Recarrega vetores no índice
+                    rows = vault.indexador.con.execute(
+                        "SELECT hash, vetor FROM vetores WHERE modelo = ? AND dim = ?",
+                        (provider.modelo, provider.dim),
+                    ).fetchall()
+                    if rows:
+                        import numpy as np
+                        hashes = [r[0] for r in rows]
+                        vecs = np.vstack([np.frombuffer(r[1], dtype=np.float32) for r in rows])
+                        indice.carregar(hashes, vecs)
+                    continue
+                elif sub == "reparar":
+                    ui.console.print("[info]Reparando embeddings pendentes...[/info]")
+                    rel = retain.retain_vault(reparar=True)
+                    ui.console.print(f"  Embeddings recuperados: {rel.embeddings_novos}")
+                    if rel.embeddings_pendentes:
+                        ui.console.print(f"  [warning]Ainda pendentes: {len(rel.embeddings_pendentes)}[/warning]")
+                    # Recarrega vetores
+                    rows = vault.indexador.con.execute(
+                        "SELECT hash, vetor FROM vetores WHERE modelo = ? AND dim = ?",
+                        (provider.modelo, provider.dim),
+                    ).fetchall()
+                    if rows:
+                        import numpy as np
+                        hashes = [r[0] for r in rows]
+                        vecs = np.vstack([np.frombuffer(r[1], dtype=np.float32) for r in rows])
+                        indice.carregar(hashes, vecs)
+                    continue
+                elif sub == "stats":
+                    # Estatísticas do índice
+                    total_notas = vault.indexador.con.execute("SELECT COUNT(*) FROM notas").fetchone()[0]
+                    total_trechos = vault.indexador.con.execute("SELECT COUNT(*) FROM trechos").fetchone()[0]
+                    total_vetores = vault.indexador.con.execute("SELECT COUNT(*) FROM vetores WHERE modelo = ? AND dim = ?", (provider.modelo, provider.dim)).fetchone()[0]
+                    ui.console.print(f"  Notas: {total_notas}")
+                    ui.console.print(f"  Trechos: {total_trechos}")
+                    ui.console.print(f"  Vetores ({provider.modelo}/{provider.dim}): {total_vetores}")
+                    continue
+                else:
+                    ui.console.print("[warning]Uso:[/warning] /memoria  |  /memoria reindex  |  /memoria reparar  |  /memoria stats")
+                    continue
+
             if texto.lower() in {"/ajuda", "/help"}:
                 ui.console.print(Panel(
                     "Comandos disponíveis:\n"
@@ -696,20 +818,26 @@ def main() -> None:
                     )
                     token_counter.reset_turn()
                 mensagens.append({"role": "assistant", "content": resposta_texto})
-            except KeyboardInterrupt:
-                # Ctrl+C durante tool calling
-                if shutdown_requested:
-                    ui.console.print("\n[error]Saída forçada — histórico NÃO gravado[/error]")
-                    sys.exit(1)
-                shutdown_requested = True
-                # Aviso imediato: 1º Ctrl+C
-                ui.console.print("\n[warning]Pressione Ctrl+C novamente para sair SEM gravar histórico.[/warning]")
-                # O loop principal vai tratar na próxima iteração
-                continue
-            except ErroModeloNVIDIA as e:
-                ui.print_error(str(e))
-                mensagens.pop()
-                continue
+            
+            # Restaura system message original (remove contexto de memória injetado)
+            if memoria_auto and contexto_memoria:
+                mensagens[0] = {"role": "system", "content": INSTRUCAO_SISTEMA}
+                contexto_memoria = None
+
+        except KeyboardInterrupt:
+            # Ctrl+C durante tool calling
+            if shutdown_requested:
+                ui.console.print("\n[error]Saída forçada — histórico NÃO gravado[/error]")
+                sys.exit(1)
+            shutdown_requested = True
+            # Aviso imediato: 1º Ctrl+C
+            ui.console.print("\n[warning]Pressione Ctrl+C novamente para sair SEM gravar histórico.[/warning]")
+            # O loop principal vai tratar na próxima iteração
+            continue
+        except ErroModeloNVIDIA as e:
+            ui.print_error(str(e))
+            mensagens.pop()
+            continue
 
 
 if __name__ == "__main__":
