@@ -333,10 +333,15 @@ def main() -> None:
 
         # Inicializa subsistema de memória (Retain/Recall/Reflect)
         memoria_auto = config.get("memoria_auto", True)
+        retain: Optional[Retain] = None
+        recall: Optional[Recall] = None
+        reflect: Optional[Reflect] = None
+        provider = None
+        indice = None
+
         if memoria_auto:
             provider = NvidiaEmbeddings(
                 modelo=config.get("NVIDIA_EMBED_MODEL"),
-                dimensions=config.get("dim_embeddings"),
             )
             indice = IndiceVetorial(config.get("dim_embeddings"))
             # Carrega vetores existentes do índice
@@ -365,7 +370,7 @@ def main() -> None:
                 vault.armazenamento.perms,
                 provider,
                 indice,
-                pesos_rrf=tuple(map(float, config.get("pesos_rrf", "1.0,1.0").split(","))),
+                pesos_rrf=tuple(map(float, config.get("pesos_rrf", "1.0,1.0").split(","))) if isinstance(config.get("pesos_rrf"), str) else config.get("pesos_rrf", (1.0, 1.0)),  # type: ignore[arg-type]
                 candidatos_por_pesquisa=config.get("candidatos"),
                 max_trechos_por_nota=config.get("max_trechos_por_nota"),
                 chars_por_token=config.get("chars_por_token"),
@@ -373,7 +378,6 @@ def main() -> None:
             reflect = Reflect()
             ui.console.print("[info]Memória ativa (Retain/Recall/Reflect)[/info]")
         else:
-            retain = recall = reflect = None
             ui.console.print("[muted]Memória desativada (memoria_auto=false)[/muted]")
 
         # Título da conversa (extraído da 1.ª pergunta do utilizador)
@@ -709,6 +713,9 @@ def main() -> None:
                 if not memoria_auto:
                     ui.console.print("[muted]Memória desativada (memoria_auto=false no config)[/muted]")
                     continue
+                assert provider is not None
+                assert indice is not None
+                assert retain is not None
                 parts = shlex.split(texto)
                 if len(parts) == 1:
                     # Status da memória
@@ -801,7 +808,7 @@ def main() -> None:
             try:
                 with ui.thinking():
                     resposta_texto, usage = executar_ciclo_ferramentas(
-                        cliente, vault, mensagens, 
+                        cliente, vault, mensagens,
                         shutdown_check=lambda: shutdown_requested,
                         token_counter=token_counter
                     )
@@ -818,26 +825,28 @@ def main() -> None:
                     )
                     token_counter.reset_turn()
                 mensagens.append({"role": "assistant", "content": resposta_texto})
-            
-            # Restaura system message original (remove contexto de memória injetado)
-            if memoria_auto and contexto_memoria:
-                mensagens[0] = {"role": "system", "content": INSTRUCAO_SISTEMA}
-                contexto_memoria = None
 
-        except KeyboardInterrupt:
-            # Ctrl+C durante tool calling
-            if shutdown_requested:
-                ui.console.print("\n[error]Saída forçada — histórico NÃO gravado[/error]")
-                sys.exit(1)
-            shutdown_requested = True
-            # Aviso imediato: 1º Ctrl+C
-            ui.console.print("\n[warning]Pressione Ctrl+C novamente para sair SEM gravar histórico.[/warning]")
-            # O loop principal vai tratar na próxima iteração
-            continue
-        except ErroModeloNVIDIA as e:
-            ui.print_error(str(e))
-            mensagens.pop()
-            continue
+
+            except KeyboardInterrupt:
+                # Ctrl+C durante tool calling
+                if shutdown_requested:
+                    ui.console.print("\n[error]Saída forçada — histórico NÃO gravado[/error]")
+                    sys.exit(1)
+                shutdown_requested = True
+                # Aviso imediato: 1º Ctrl+C
+                ui.console.print("\n[warning]Pressione Ctrl+C novamente para sair SEM gravar histórico.[/warning]")
+                # O loop principal vai tratar na próxima iteração
+                continue
+            except ErroModeloNVIDIA as e:
+                ui.print_error(str(e))
+                mensagens.pop()
+                continue
+
+            finally:
+                # Restaura o system message original após cada tentativa.
+                if memoria_auto and contexto_memoria:
+                    mensagens[0] = {"role": "system", "content": INSTRUCAO_SISTEMA}
+                    contexto_memoria = None
 
 
 if __name__ == "__main__":
