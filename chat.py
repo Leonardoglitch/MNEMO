@@ -343,7 +343,8 @@ def main() -> None:
             provider = NvidiaEmbeddings(
                 modelo=config.get("NVIDIA_EMBED_MODEL"),
             )
-            indice = IndiceVetorial(config.get("dim_embeddings"))
+            # Usa a dimensão real do provider (detectada via API), não o config
+            indice = IndiceVetorial(provider.dim)
             # Carrega vetores existentes do índice
             rows = vault.indexador.con.execute(
                 "SELECT hash, vetor FROM vetores WHERE modelo = ? AND dim = ?",

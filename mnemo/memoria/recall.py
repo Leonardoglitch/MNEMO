@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import List, Optional, Set, Tuple
+from typing import List, Optional, Set, Tuple, Any
 
 import numpy as np
 
@@ -110,7 +110,11 @@ class Recall:
         return [(r[0], r[1], -r[2]) for r in rows]  # score positivo (maior = melhor)
 
     def _semantica(self, consulta: str, ids_permitidos: List[int], n: int) -> List[Tuple[int, int, float]]:
-        """Busca semântica via cosseno. Devolve [(trecho_id, nota_id, score_cos), ...]."""
+        """Busca semântica via cosseno. Devolve [(trecho_id, nota_id, score_cos), ...].
+        
+        Degradação graciosa: se embeddings falharem (rede, API, índice vazio), 
+        retorna lista vazia para que o recall funcione só com BM25.
+        """
         if not self.indice_vetorial.pronto or not ids_permitidos:
             return []
 
@@ -118,9 +122,15 @@ class Recall:
         cache_key = f"{self.provider.modelo}:{self.provider.dim}:query:{consulta}"
         vetor_consulta = self._cache_consulta.get(cache_key)
         if vetor_consulta is None:
-            vecs = self.provider.embed([consulta], input_type="query")
-            vetor_consulta = vecs[0]
-            self._cache_consulta.set(cache_key, vetor_consulta)
+            try:
+                vecs = self.provider.embed([consulta], input_type="query")
+                vetor_consulta = vecs[0]
+                self._cache_consulta.set(cache_key, vetor_consulta)
+            except Exception as e:
+                # Degradação graciosa: loga e retorna vazio para fallback lexical
+                import logging
+                logging.warning(f"Falha ao embeber consulta (fallback lexical): {e}")
+                return []
 
         # Mapeia ids_permitidos (nota_ids) para índices locais em _hashes
         # Precisamos de saber quais trechos pertencem a notas permitidas
@@ -137,27 +147,21 @@ class Recall:
         if not trecho_ids_permitidos:
             return []
 
-        # Mapeia trecho_id -> índice local em _hashes
-        hash_to_idx = {h: i for i, h in enumerate(self.indice_vetorial._hashes)}
-        indices_locais: List[int] = []
-        for h in self._hashes_por_trecho_id(trecho_ids_permitidos):
-            idx = hash_to_idx.get(h)
-            if idx is not None:
-                indices_locais.append(idx)
+        # Obtém hashes dos trechos permitidos
+        hashes_permitidos = self._hashes_por_trecho_id(trecho_ids_permitidos)
 
-        if not indices_locais:
-            return []
+        # Top-k no índice vetorial (sem filtro de índices, filtraremos depois)
+        top_k = self.indice_vetorial.top_k(vetor_consulta, n * 3)  # busca mais para compensar filtragem
 
-        # Top-k no índice vetorial
-        top_k = self.indice_vetorial.top_k(vetor_consulta, n, indices_permitidos=indices_locais)
-        # top_k = [(idx_local, score), ...]
-
-        # Mapeia de volta para trecho_id
+        # Mapeia de volta para trecho_id, filtrando apenas os permitidos
         hash_list = self.indice_vetorial._hashes
+        hashes_permitidos_set = set(hashes_permitidos)
         resultados = []
         for idx_local, score in top_k:
             if 0 <= idx_local < len(hash_list):
                 hash_t = hash_list[idx_local]
+                if hash_t not in hashes_permitidos_set:
+                    continue
                 # Obtém trecho_id e nota_id do hash
                 row = self.indexador.con.execute(
                     "SELECT id, nota_id FROM trechos WHERE hash = ?", (hash_t,)
@@ -181,16 +185,20 @@ class Recall:
         self,
         lex: List[Tuple[int, int, float]],
         sem: List[Tuple[int, int, float]],
-    ) -> List[Tuple[int, int, float, dict[str, int]]]:
+    ) -> List[Tuple[int, int, float, dict[str, Any]]]:
         """
         Fusão RRF: score = sum(peso / (k0 + rank)).
-        Devolve [(trecho_id, nota_id, score_rrf, {"lex": rank, "sem": rank}), ...]
+        Devolve [(trecho_id, nota_id, score_rrf, {"lex": rank, "sem": rank, "score_lex": float, "score_sem": float}), ...]
         """
         peso_lex, peso_sem = self.pesos_rrf
 
         # Rank de cada resultado em cada lista (1-indexed)
         rank_lex = {tid: i + 1 for i, (tid, _, _) in enumerate(lex)}
         rank_sem = {tid: i + 1 for i, (tid, _, _) in enumerate(sem)}
+        
+        # Scores originais (BM25 e cosseno)
+        score_lex_dict = {tid: score for tid, _, score in lex}
+        score_sem_dict = {tid: score for tid, _, score in sem}
 
         # Todos os trechos únicos
         todos_ids = set(rank_lex.keys()) | set(rank_sem.keys())
@@ -198,13 +206,15 @@ class Recall:
         fundidos = []
         for tid in todos_ids:
             score = 0.0
-            origem = {}
+            origem: dict[str, Any] = {}
             if tid in rank_lex:
                 score += peso_lex / (self.k0_rrf + rank_lex[tid])
                 origem["lex"] = rank_lex[tid]
+                origem["score_lex"] = score_lex_dict[tid]
             if tid in rank_sem:
                 score += peso_sem / (self.k0_rrf + rank_sem[tid])
                 origem["sem"] = rank_sem[tid]
+                origem["score_sem"] = score_sem_dict[tid]
 
             # Obtém nota_id
             row = self.indexador.con.execute("SELECT nota_id FROM trechos WHERE id = ?", (tid,)).fetchone()
