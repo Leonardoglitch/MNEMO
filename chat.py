@@ -772,11 +772,27 @@ def main() -> None:
                     ui.console.print(f"  Trechos: {total_trechos}")
                     ui.console.print(f"  Vetores ({provider.modelo}/{provider.dim}): {total_vetores}")
                     continue
-                else:
-                    ui.console.print("[warning]Uso:[/warning] /memoria  |  /memoria reindex  |  /memoria reparar  |  /memoria stats")
+                elif sub == "limpar":
+                    if not ui.confirm("Apagar TODOS os dados da memória (vetores, trechos, FTS)? Esta ação não pode ser desfeita."):
+                        continue
+                    try:
+                        with FerramentasVault(vault_path) as ferramentas:
+                            # Apaga vetores
+                            vault.indexador.con.execute("DELETE FROM vetores WHERE modelo = ? AND dim = ?", (provider.modelo, provider.dim))
+                            # Apaga trechos e FTS
+                            vault.indexador.con.execute("DELETE FROM trechos_fts")
+                            vault.indexador.con.execute("DELETE FROM trechos")
+                            vault.indexador.con.execute("DELETE FROM notas WHERE caminho LIKE 'memoria/%'")
+                            vault.indexador.con.commit()
+                            # Limpa índice em memória
+                            indice.invalidar()
+                        ui.console.print("[success]Memória limpa completamente.[/success]")
+                    except Exception as e:
+                        ui.console.print(f"[error]Erro ao limpar memória: {e}[/error]")
                     continue
-
-            if texto.lower() in {"/ajuda", "/help"}:
+                else:
+                    ui.console.print("[warning]Uso:[/warning] /memoria  |  /memoria reindex  |  /memoria reparar  |  /memoria stats  |  /memoria limpar")
+                    continue
                 ui.console.print(Panel(
                     "Comandos disponíveis:\n"
                     "  /salvar         Grava checkpoint da conversa em historico/\n"
@@ -825,6 +841,14 @@ def main() -> None:
                         token_counter.get_session_summary()
                     )
                     token_counter.reset_turn()
+                
+                # Verifica citações na resposta (Reflect)
+                if memoria_auto and reflect and contexto_memoria:
+                    invalidas = reflect.verificar(resposta_texto, contexto_memoria)
+                    if invalidas:
+                        ui.console.print(f"[warning]Citações não encontradas no contexto: {', '.join(invalidas)}[/warning]")
+                        ui.console.print("[dim]O modelo pode ter inventado estas referências.[/dim]")
+                
                 mensagens.append({"role": "assistant", "content": resposta_texto})
 
 
