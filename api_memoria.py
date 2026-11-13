@@ -258,24 +258,25 @@ async def retain_conversa(request: Dict[str, Any]) -> List[Dict[str, Any]]:
     """Extrai memórias de uma conversa via LLM (retain_conversa)."""
     from mnemo import Permissoes, Armazenamento
     from mnemo.indexador import Indexador
-    from mnemo.memoria import Retain, NvidiaEmbeddings
+    from mnemo.memoria import Retain, FakeEmbeddings
     
     perms = Permissoes("vault-teste")
     armazenamento = Armazenamento(Permissoes("vault-teste"))
     indexador = Indexador(Permissoes("vault-teste"))
     
-    from mnemo.memoria import NvidiaEmbeddings
-    provider = NvidiaEmbeddings()
+    from mnemo.memoria import FakeEmbeddings
+    provider = FakeEmbeddings(dim=512)
     
     retain = Retain(
         perms=perms,
         armazenamento=armazenamento,
         indexador=indexador,
         provider=provider,
-        modelo_emb=provider.modelo,
-        dim_emb=provider.dim,
+        modelo_emb="fake",
+        dim_emb=512,
     )
     
+    # Usa FakeEmbeddings para testes (não precisa de API key)
     propostas = retain.retain_conversa(request["mensagens"], state.cliente_llm)
     
     return [
@@ -295,6 +296,15 @@ async def retain_conversa(request: Dict[str, Any]) -> List[Dict[str, Any]]:
 async def refletir(request: Dict[str, Any]) -> List[Dict[str, Any]]:
     """Consolida observações/opiniões por entidade (refletir_conversa)."""
     assert state.retain is not None
+    
+    # Valida payload
+    if "mensagens" not in request:
+        raise HTTPException(422, "Campo 'mensagens' é obrigatório")
+    
+    # Se não há cliente LLM, retorna lista vazia (modo de teste)
+    if state.cliente_llm is None:
+        return []
+    
     propostas = state.retain.refletir_conversa(request["mensagens"], state.cliente_llm)
     
     return [
@@ -316,12 +326,20 @@ async def stats() -> Dict[str, int]:
     assert state.indexador is not None
     assert state.provider is not None
     
-    total_notas = state.indexador.con.execute("SELECT COUNT(*) FROM notas").fetchone()[0]
-    total_trechos = state.indexador.con.execute("SELECT COUNT(*) FROM trechos").fetchone()[0]
-    total_vetores = state.indexador.con.execute(
-        "SELECT COUNT(*) FROM vetores WHERE modelo = ? AND dim = ?",
-        (state.provider.modelo, state.provider.dim),
-    ).fetchone()[0]
+    # Cria nova conexão para evitar problemas de threading com SQLite
+    import sqlite3
+    from pathlib import Path
+    db_path = state.indexador.caminho_db
+    con = sqlite3.connect(db_path)
+    try:
+        total_notas = con.execute("SELECT COUNT(*) FROM notas").fetchone()[0]
+        total_trechos = con.execute("SELECT COUNT(*) FROM trechos").fetchone()[0]
+        total_vetores = con.execute(
+            "SELECT COUNT(*) FROM vetores WHERE modelo = ? AND dim = ?",
+            (state.provider.modelo, state.provider.dim),
+        ).fetchone()[0]
+    finally:
+        con.close()
     
     return {
         "total_notas": total_notas,
