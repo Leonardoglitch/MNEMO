@@ -431,6 +431,125 @@ source_count: 1
 
         return propostas
 
+    def refletir_conversa(
+        self,
+        mensagens: List[Dict[str, Any]],
+        cliente_llm: Any,  # ClienteNVIDIA ou similar com método conversar
+    ) -> List[Proposta]:
+        """
+        Consolida observações por entidade e propõe opiniões com confiança (confiança).
+        Sempre cria rascunhos com tipo: observacao e confiança no frontmatter.
+
+        Args:
+            mensagens: Histórico da conversa (lista de dicts com role/content)
+            cliente_llm: Cliente LLM com método conversar(mensagens, ferramentas=None, stream=False)
+
+        Returns:
+            Lista de Proposta (rascunhos criados, prontos para confirmação)
+        """
+        # Prompt para o LLM consolidar observações e formar opiniões
+        prompt_sistema = (
+            "És um assistente que reflete sobre uma conversa e sintetiza observações e opiniões. "
+            "Analisa a conversa e identifica entidades (pessoas, projetos, conceitos) sobre as quais "
+            "o utilizador expressou opiniões ou fez observações. "
+            "Para cada entidade, consolida as observações e forma uma opinião sintetizada com "
+            "um nível de confiança (0.0 a 1.0).\n"
+            "Devolve APENAS um array JSON com objetos no formato:\n"
+            '{"entidade": "nome da entidade", "observacao": "observação consolidada", '
+            '"opiniao": "opinião sintetizada", "confianca": 0.0-1.0, '
+            '"tags": ["tag1", "tag2"], "fonte": "conversa"}.\n'
+            "Só inclui entidades sobre as quais há opiniões ou observações claras. "
+            "Não inventes. Se não houver nada para consolidar, devolve []."
+        )
+
+        mensagens_com_prompt = [
+            {"role": "system", "content": prompt_sistema},
+            *mensagens,
+            {"role": "user", "content": "Reflete sobre esta conversa e sintetiza observações e opiniões por entidade em formato JSON."},
+        ]
+
+        # Chama o LLM
+        try:
+            resposta_obj = cliente_llm.conversar(mensagens_com_prompt, ferramentas=None, stream=False)
+            resposta_texto = resposta_obj[0].get("content", "[]") if isinstance(resposta_obj, tuple) else resposta_obj.get("content", "[]")
+        except Exception as e:
+            raise RuntimeError(f"Falha ao refletir sobre a conversa: {e}") from e
+
+        # Parse JSON
+        try:
+            items = json.loads(resposta_texto)
+        except json.JSONDecodeError:
+            # Tenta extrair JSON de texto solto
+            import re
+            match = re.search(r"\[.*\]", resposta_texto, re.DOTALL)
+            if match:
+                items = json.loads(match.group())
+            else:
+                return []
+
+        if not isinstance(items, list):
+            return []
+
+        propostas = []
+
+        for item in items:
+            if not isinstance(item, dict):
+                continue
+            entidade = item.get("entidade", "").strip()
+            observacao = item.get("observacao", "").strip()
+            opiniao = item.get("opiniao", "").strip()
+            confianca = item.get("confianca")
+            tags = item.get("tags", [])
+            fonte = item.get("fonte", "conversa")
+
+            if not entidade or not observacao or not opiniao:
+                continue
+            if confianca is None:
+                continue
+            try:
+                confianca = float(confianca)
+                if not 0.0 <= confianca <= 1.0:
+                    continue
+            except (ValueError, TypeError):
+                continue
+
+            # Normaliza entidade para nome de ficheiro
+            entidade_slug = entidade.lower().replace(" ", "-").replace("/", "-")
+            caminho = f"memoria/reflexao-{entidade_slug}.md"
+
+            frontmatter = f"""---
+entidade: {entidade}
+tipo: observacao
+confianca: {confianca:.2f}
+tags: {json.dumps(tags, ensure_ascii=False)}
+status: rascunho
+fonte: {fonte}
+source_count: 1
+---
+"""
+            conteudo = f"{frontmatter}\n## Observação\n{observacao}\n\n## Opinião\n{opiniao}\n"
+
+            # Grava como rascunho
+            try:
+                self.armazenamento.criar(f"memoria/reflexao-{entidade_slug}.md", conteudo)
+                self.indexador.atualizar_nota(f"memoria/reflexao-{entidade_slug}.md")
+            except Exception:
+                try:
+                    self.armazenamento.editar(f"memoria/reflexao-{entidade_slug}.md", conteudo)
+                    self.indexador.atualizar_nota(f"memoria/reflexao-{entidade_slug}.md")
+                except Exception:
+                    pass
+
+            propostas.append(Proposta(
+                tipo="observacao",
+                titulo=f"Reflexão: {entidade}",
+                texto=f"Observação: {observacao}\n\nOpinião: {opiniao}",
+                tags=tags,
+                score_duplicado=confianca,
+            ))
+
+        return propostas
+
 
 def meta_get(con: sqlite3.Connection, chave: str) -> Optional[str]:
     row = con.execute("SELECT valor FROM meta WHERE chave = ?", (chave,)).fetchone()

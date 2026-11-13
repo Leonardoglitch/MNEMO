@@ -818,6 +818,28 @@ def main() -> None:
                     ui.console.print("[muted]Operação cancelada.[/muted]")
                 continue
 
+            if texto == "/refletir":
+                if not memoria_auto:
+                    ui.console.print("[muted]Memória desativada (memoria_auto=false no config)[/muted]")
+                    continue
+                assert retain is not None
+                assert cliente is not None
+                ui.console.print("[info]A refletir sobre a conversa...[/info]")
+                propostas = retain.refletir_conversa(mensagens, cliente)
+                if not propostas:
+                    ui.console.print("[muted]Nenhuma observação ou opinião para consolidar.[/muted]")
+                    continue
+                ui.console.print(f"[info]Encontradas {len(propostas)} reflexões candidatas:[/info]")
+                for i, p in enumerate(propostas, 1):
+                    ui.console.print(f"  {i}. [observacao] {p.titulo} (confiança={p.score_duplicado:.2f})")
+                    ui.console.print(f"     Tags: {', '.join(p.tags) if p.tags else '(sem tags)'}")
+                if ui.confirm("\nGravar estas reflexões como rascunhos?"):
+                    ui.console.print("[success]Reflexões guardadas como rascunhos em notas/memoria/reflexao-*.md.[/success]")
+                    ui.console.print("[info]Use /memoria stats para ver ou edite as notas em notas/memoria/reflexao-*.md para confirmar.[/info]")
+                else:
+                    ui.console.print("[muted]Operação cancelada.[/muted]")
+                continue
+
             if texto.lower() in {"/ajuda", "/help"}:
                 ui.console.print(Panel(
                     "  /salvar         Grava checkpoint da conversa em historico/\n"
@@ -834,6 +856,8 @@ def main() -> None:
                     "  /config fallback <m1,m2,...>    Define modelos fallback\n"
                     "  /config tokens on|off           Ativa/desativa contador de tokens\n"
                     "  /config reset                   Reseta configuração\n"
+                    "  /memorizar       Extrai memórias da conversa (rascunhos)\n"
+                    "  /refletir        Consolida observações/opiniões por entidade (rascunhos)\n"
                     "  /ajuda           Mostra esta ajuda\n"
                     "  sair / exit / quit   Termina a conversa",
                     title="Ajuda", border_style="info"))
