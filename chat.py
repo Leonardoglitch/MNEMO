@@ -793,8 +793,33 @@ def main() -> None:
                 else:
                     ui.console.print("[warning]Uso:[/warning] /memoria  |  /memoria reindex  |  /memoria reparar  |  /memoria stats  |  /memoria limpar")
                     continue
+
+            if texto == "/memorizar":
+                if not memoria_auto:
+                    ui.console.print("[muted]Memória desativada (memoria_auto=false no config)[/muted]")
+                    continue
+                assert retain is not None
+                assert cliente is not None
+                ui.console.print("[info]A extrair memórias da conversa...[/info]")
+                propostas = retain.retain_conversa(mensagens, cliente)
+                if not propostas:
+                    ui.console.print("[muted]Nenhuma memória para extrair desta conversa.[/muted]")
+                    continue
+                ui.console.print(f"[info]Encontradas {len(propostas)} memórias candidatas:[/info]")
+                for i, p in enumerate(propostas, 1):
+                    status = f" (duplicado, score={p.score_duplicado:.2f})" if p.nota_existente_id else ""
+                    ui.console.print(f"  {i}. [{p.tipo}] {p.titulo}{status}")
+                    ui.console.print(f"     Tags: {', '.join(p.tags) if p.tags else '(sem tags)'}")
+                if ui.confirm("\nGravar estas memórias como rascunhos?"):
+                    # As propostas já foram gravadas como rascunho pela retain_conversa
+                    ui.console.print("[success]Memórias guardadas como rascunhos em notas/memoria/.[/success]")
+                    ui.console.print("[info]Use /memoria stats para ver ou edite as notas em notas/memoria/ para confirmar.[/info]")
+                else:
+                    ui.console.print("[muted]Operação cancelada.[/muted]")
+                continue
+
+            if texto.lower() in {"/ajuda", "/help"}:
                 ui.console.print(Panel(
-                    "Comandos disponíveis:\n"
                     "  /salvar         Grava checkpoint da conversa em historico/\n"
                     "  /historico      Lista últimos registos em historico/\n"
                     "  /vault          Mostra vault atual\n"

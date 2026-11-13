@@ -6,7 +6,7 @@ import hashlib
 import json
 import sqlite3
 from pathlib import Path
-from typing import List, Optional, Tuple
+from typing import List, Optional, Tuple, Any, Dict
 
 import numpy as np
 
@@ -14,6 +14,7 @@ from mnemo import Armazenamento, Permissoes
 from mnemo.indexador import Indexador, separar_frontmatter
 from mnemo.memoria import (
     Trecho,
+    Proposta,
     RelatorioRetain,
     estimar_tokens,
     NvidiaEmbeddings,
@@ -295,6 +296,140 @@ class Retain:
 
         self.indexador.con.commit()
         return relatorio
+
+    def retain_conversa(
+        self,
+        mensagens: List[Dict[str, Any]],
+        cliente_llm: Any,  # ClienteNVIDIA ou similar com método conversar
+    ) -> List[Proposta]:
+        """
+        Extrai memórias de uma conversa via LLM, deduplica e cria propostas como rascunhos.
+
+        Args:
+            mensagens: Histórico da conversa (lista de dicts com role/content)
+            cliente_llm: Cliente LLM com método conversar(mensagens, ferramentas=None, stream=False)
+
+        Returns:
+            Lista de Proposta (rascunhos criados, prontos para confirmação)
+        """
+        # Prompt para o LLM extrair memórias
+        prompt_sistema = (
+            "És um assistente que extrai memórias relevantes de uma conversa. "
+            "Analisa a conversa e extrai decisões, factos, preferências e observações "
+            "que o utilizador gostaria de guardar na sua memória pessoal. "
+            "Devolve APENAS um array JSON com objetos no formato:\n"
+            '{"tipo": "facto|decisao|preferencia|experiencia|observacao", '
+            '"titulo": "título curto", "texto": "descrição detalhada", "tags": ["tag1", "tag2"]}.\n'
+            "Só inclui itens que o utilizador explicitamente mencionou ou decidiu. "
+            "Não inventes nem infiras. Se não houver nada para extrair, devolve []."
+        )
+
+        mensagens_com_prompt = [
+            {"role": "system", "content": prompt_sistema},
+            *mensagens,
+            {"role": "user", "content": "Extrai as memórias desta conversa em formato JSON."},
+        ]
+
+        # Chama o LLM
+        try:
+            resposta_obj = cliente_llm.conversar(mensagens_com_prompt, ferramentas=None, stream=False)
+            resposta_texto = resposta_obj[0].get("content", "[]") if isinstance(resposta_obj, tuple) else resposta_obj.get("content", "[]")
+        except Exception as e:
+            raise RuntimeError(f"Falha ao extrair memórias do LLM: {e}") from e
+
+        # Parse JSON
+        try:
+            items = json.loads(resposta_texto)
+        except json.JSONDecodeError:
+            # Tenta extrair JSON de texto solto
+            import re
+            match = re.search(r"\[.*\]", resposta_texto, re.DOTALL)
+            if match:
+                items = json.loads(match.group())
+            else:
+                return []
+
+        if not isinstance(items, list):
+            return []
+
+        propostas = []
+        limiar_duplicado = 0.90
+
+        for item in items:
+            if not isinstance(item, dict):
+                continue
+            tipo = item.get("tipo")
+            titulo = item.get("titulo", "").strip()
+            texto = item.get("texto", "").strip()
+            tags = item.get("tags", [])
+
+            if not tipo or not titulo or not texto:
+                continue
+            if tipo not in ("facto", "decisao", "preferencia", "experiencia", "observacao"):
+                continue
+
+            # Deduplicação: Recall interno por similaridade de cosseno
+            nota_existente_id = None
+            score_duplicado = 0.0
+
+            # Busca por trechos semelhantes no índice
+            trecho_para_busca = f"{titulo}\n\n{texto}"
+            if hasattr(self, '_indice_vetorial') and self._indice_vetorial.pronto:
+                try:
+                    from mnemo.memoria import Recall, estimar_tokens
+                    recall_temp = Recall(
+                        self.indexador,
+                        self.perms,
+                        self.provider,
+                        self._indice_vetorial,
+                        pesos_rrf=(1.0, 0.0),  # só lexical para deduplicação rápida
+                        candidatos_por_pesquisa=10,
+                        max_trechos_por_nota=1,
+                    )
+                    resultados = recall_temp.recall(trecho_para_busca, k=1, budget_tokens=500)
+                    if resultados:
+                        r = resultados[0]
+                        if r.score > 0.90:
+                            nota_existente_id = r.nota_id
+                            score_duplicado = r.score
+                except Exception:
+                    pass
+
+            # Cria nota como rascunho em notas/memoria/
+            caminho = f"memoria/{titulo.lower().replace(' ', '-')}.md"
+            frontmatter = f"""---
+titulo: {titulo}
+tipo: {tipo}
+tags: {json.dumps(tags, ensure_ascii=False)}
+status: rascunho
+source_count: 1
+---
+"""
+            conteudo = f"{frontmatter}\n{texto}\n"
+
+            # Grava como rascunho
+            try:
+                self.armazenamento.criar(caminho, conteudo)
+                # Atualiza índice
+                self.indexador.atualizar_nota(caminho)
+            except Exception:
+                # Se já existe, tenta atualizar
+                try:
+                    self.armazenamento.editar(caminho, conteudo)
+                    self.indexador.atualizar_nota(caminho)
+                except Exception:
+                    pass
+
+            propostas.append(Proposta(
+                tipo=tipo,
+                titulo=titulo,
+                texto=texto,
+                tags=tags,
+                nota_existente_id=nota_existente_id,
+                score_duplicado=score_duplicado,
+            ))
+
+        return propostas
 
 
 def meta_get(con: sqlite3.Connection, chave: str) -> Optional[str]:
