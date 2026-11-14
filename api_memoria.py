@@ -7,380 +7,317 @@ Endpoints:
 - POST /memoria/refletir         - Consolida observações/opiniões (refletir_conversa)
 - GET  /memoria/stats            - Estatísticas do índice
 - POST /memoria/limpar           - Limpa dados da memória
+- GET  /health
+
+Desenho: os componentes vivem num objeto `Servicos`, construído por `construir_servicos()`
+e injetado em `criar_app()`. Em produção o `lifespan` constrói-o a partir do ambiente
+(.env, MNEMO_VAULT); nos testes injeta-se um `Servicos` com FakeEmbeddings, LLM falso e
+base de dados em memória, sem tocar no disco nem na rede.
+
+Arranque:  uvicorn api_memoria:app --host 127.0.0.1 --port 8000
 """
 
 from __future__ import annotations
 
-from typing import List, Optional, Any, Dict
-
-from fastapi import FastAPI, HTTPException, Query
-from pydantic import BaseModel, Field
-
-from mnemo import Permissoes
-from mnemo.memoria import (
-    Recall,
-    Retain,
-    Reflect,
-    NvidiaEmbeddings,
-    IndiceVetorial,
-)
-from mnemo.indexador import Indexador
-from mnemo.armazenamento import Armazenamento
-from mnemo import Permissoes, FerramentasVault
-from mnemo.modelo_nvidia import ClienteNVIDIA, ErroModeloNVIDIA
 import os
+import threading
+from contextlib import asynccontextmanager
+from dataclasses import dataclass, field
+from pathlib import Path
+from typing import Any, AsyncIterator, Dict, List, Optional
+
+from fastapi import Depends, FastAPI, HTTPException, Query, Request
+from pydantic import BaseModel
+
+from mnemo.armazenamento import Armazenamento
+from mnemo.indexador import Indexador
+from mnemo.memoria import NvidiaEmbeddings, Recall, Reflect, Retain
+from mnemo.memoria.esquema import incrementar_versao_vetores
+from mnemo.modelo_nvidia import ClienteNVIDIA, ErroModeloNVIDIA
+from mnemo.permissoes import Permissoes
 
 
-app = FastAPI(
-    title="Mnemo Memoria API",
-    description="API para o subsistema de memória do Mnemo (Retain/Recall/Reflect)",
-    version="0.1.0",
-)
-
-
-# Modelos Pydantic
-class RecallRequest(BaseModel):
-    consulta: str
-    k: int = 8
-    budget_tokens: int = 2000
-    tags: Optional[List[str]] = None
-    tipos: Optional[List[str]] = None
-    explicar: bool = False
-
-
-class RecallResponse(BaseModel):
-    resultados: List[Dict[str, Any]]
-    modo: str
-
-
-class RetainVaultResponse(BaseModel):
-    novas: int
-    atualizadas: int
-    inalteradas: int
-    removidas: int
-    trechos_novos: int
-    trechos_atualizados: int
-    embeddings_novos: int
-    embeddings_pendentes: List[str]
-    erros: List[str]
+# --- Modelos de pedido ---
 
 
 class RetainConversaRequest(BaseModel):
     mensagens: List[Dict[str, Any]]
 
 
-class PropostaResponse(BaseModel):
-    tipo: str
-    titulo: str
-    texto: str
-    tags: List[str]
-    nota_existente_id: Optional[int] = None
-    score_duplicado: float
-
-
 class ReflectRequest(BaseModel):
     mensagens: List[Dict[str, Any]]
 
 
-class StatsResponse(BaseModel):
-    total_notas: int
-    total_trechos: int
-    total_vetores: int
+# --- Serviços ---
 
 
-class LimparResponse(BaseModel):
-    sucesso: bool
-    mensagem: str
+@dataclass
+class Servicos:
+    """Componentes partilhados pelos endpoints (uma instância por aplicação)."""
 
-
-# Dependências globais (inicializadas no startup)
-class AppState:
-    perms: Optional[Any] = None
-    vault_path: str = "vault-teste"
-    indexador: Optional[Any] = None
-    armazenamento: Optional[Any] = None
-    provider: Optional[Any] = None
-    indice: Optional[Any] = None
-    recall: Optional[Any] = None
-    retain: Optional[Any] = None
-    reflect: Optional[Any] = None
+    perms: Permissoes
+    indexador: Indexador
+    armazenamento: Armazenamento
+    provider: Any
+    retain: Retain
+    recall: Recall
+    reflect: Reflect
     cliente_llm: Optional[Any] = None
+    # A ligação SQLite é partilhada entre threads (check_same_thread=False), por isso todo o
+    # acesso passa por este lock.
+    lock: Any = field(default_factory=threading.RLock)
+
+    def fechar(self) -> None:
+        self.indexador.fechar()
 
 
-state = AppState()
+def construir_servicos(
+    vault: str,
+    *,
+    provider: Any = None,
+    cliente_llm: Any = None,
+    caminho_db: Optional[str] = None,
+) -> Servicos:
+    """Constrói todos os componentes sobre UM Indexador (uma só ligação) e UM índice vetorial.
 
+    provider=None usa a NvidiaEmbeddings real; nos testes passa-se um FakeEmbeddings.
+    caminho_db=":memory:" dá uma base em memória, partilhada por Retain e Recall.
+    """
+    perms = Permissoes(vault)
+    indexador = Indexador(perms, caminho_db=caminho_db, check_same_thread=False)
+    indexador.reindexar_tudo()
+    armazenamento = Armazenamento(perms)
+    provider = provider if provider is not None else NvidiaEmbeddings()
 
-@app.on_event("startup")
-async def startup() -> None:
-    """Inicializa componentes na inicialização da aplicação."""
-    import os
-    
-    # Carrega .env
-    def carregar_env(caminho: str = ".env") -> None:
-        from pathlib import Path
-        if not Path(caminho).is_absolute():
-            caminho = str(Path(__file__).parent / caminho)
-        try:
-            with open(caminho, encoding="utf-8-sig") as f:
-                for linha in f:
-                    linha = linha.strip()
-                    if not linha or linha.startswith("#") or "=" not in linha:
-                        continue
-                    chave, valor = linha.split("=", 1)
-                    os.environ[chave.strip()] = valor.strip().strip("'\"")
-        except FileNotFoundError:
-            pass
-    
-    carregar_env()
-    
-    state.vault_path = os.environ.get("MNEMO_VAULT", "vault-teste")
-    state.perms = Permissoes(state.vault_path)
-    state.indexador = Indexador(state.perms)
-    state.indexador.reindexar_tudo()
-    state.armazenamento = Armazenamento(state.perms)
-    
-    # Cliente LLM
-    try:
-        from mnemo.modelo_nvidia import ClienteNVIDIA
-        state.cliente_llm = ClienteNVIDIA()
-    except ErroModeloNVIDIA:
-        state.cliente_llm = None
-    
-    # Provider de embeddings
-    from mnemo.memoria import NvidiaEmbeddings
-    state.provider = NvidiaEmbeddings()
-    
-    # Índice vetorial
-    from mnemo.memoria import IndiceVetorial
-    state.indice = IndiceVetorial(state.provider.dim)
-    
-    # Carrega vetores existentes
-    rows = state.indexador.con.execute(
-        "SELECT hash, vetor FROM vetores WHERE modelo = ? AND dim = ?",
-        (state.provider.modelo, state.provider.dim),
-    ).fetchall()
-    if rows:
-        import numpy as np
-        hashes = [r[0] for r in rows]
-        vecs = np.vstack([np.frombuffer(r[1], dtype=np.float32) for r in rows])
-        state.indice.carregar(hashes, vecs)
-    
-    # Instancia componentes
-    from mnemo.memoria import Retain, Recall, Reflect
-    state.retain = Retain(
-        perms=Permissoes(state.vault_path),
-        armazenamento=Armazenamento(Permissoes(state.vault_path)),
-        indexador=state.indexador,
-        provider=state.provider,
-        modelo_emb=state.provider.modelo,
-        dim_emb=state.provider.dim,
-    )
-    state.recall = Recall(
-        state.indexador,
-        Permissoes(state.vault_path),
-        state.provider,
-        state.indice,
-    )
-    state.reflect = Reflect()
-
-
-@app.on_event("shutdown")
-async def shutdown() -> None:
-    """Limpa recursos no encerramento."""
-    if state.indexador:
-        state.indexador.fechar()
-
-
-@app.get("/memoria/recall", response_model=Dict[str, Any])
-async def recall_endpoint(
-    consulta: str = Query(..., description="Consulta de busca"),
-    k: int = Query(8, ge=1, le=50),
-    budget_tokens: int = Query(2000, ge=100, le=10000),
-    tags: Optional[List[str]] = Query(None),
-    tipos: Optional[List[str]] = Query(None),
-    explicar: bool = Query(False),
-) -> Dict[str, Any]:
-    """Busca híbrida (BM25 + embeddings) com fusão RRF."""
-    if not state.recall:
-        raise HTTPException(503, "Memória não inicializada")
-    
-    resultados = state.recall.recall(
-        consulta=consulta,
-        k=k,
-        budget_tokens=budget_tokens,
-        tags=tags,
-        tipos=tipos,
-        explicar=explicar,
-    )
-    
-    resultados_dict = []
-    for r in resultados:
-        d = {
-            "nota_id": r.nota_id,
-            "nota_caminho": r.nota_caminho,
-            "nota_titulo": r.nota_titulo,
-            "trecho_id": r.trecho_id,
-            "trecho_ordem": r.trecho_ordem,
-            "titulo_secao": r.titulo_secao,
-            "texto": r.texto,
-            "score": r.score,
-            "origem": r.origem,
-            "citacao": r.citacao,
-            "modo": r.modo,
-        }
-        resultados_dict.append(d)
-    
-    return {"resultados": resultados_dict, "modo": "hibrido"}
-
-
-@app.post("/memoria/retain/vault", response_model=Dict[str, Any])
-async def retain_vault(reparar: bool = Query(False)) -> Dict[str, Any]:
-    """Sincroniza todo o vault (retain_vault)."""
-    if not state.retain:
-        raise HTTPException(503, "Memória não inicializada")
-    
-    rel = state.retain.retain_vault(reparar=reparar)
-    return {
-        "novas": rel.novas,
-        "atualizadas": rel.atualizadas,
-        "inalteradas": rel.inalteradas,
-        "removidas": rel.removidas,
-        "trechos_novos": rel.trechos_novos,
-        "trechos_atualizados": rel.trechos_atualizados,
-        "embeddings_novos": rel.embeddings_novos,
-        "embeddings_pendentes": rel.embeddings_pendentes,
-        "erros": rel.erros,
-    }
-
-
-@app.post("/memoria/retain/conversa", response_model=List[Dict[str, Any]])
-async def retain_conversa(request: Dict[str, Any]) -> List[Dict[str, Any]]:
-    """Extrai memórias de uma conversa via LLM (retain_conversa)."""
-    from mnemo import Permissoes, Armazenamento
-    from mnemo.indexador import Indexador
-    from mnemo.memoria import Retain, FakeEmbeddings
-    
-    perms = Permissoes("vault-teste")
-    armazenamento = Armazenamento(Permissoes("vault-teste"))
-    indexador = Indexador(Permissoes("vault-teste"))
-    
-    from mnemo.memoria import FakeEmbeddings
-    provider = FakeEmbeddings(dim=512)
-    
-    retain = Retain(
+    retain = Retain(perms, armazenamento, indexador, provider, provider.modelo, provider.dim)
+    # O Recall usa o MESMO índice vetorial do Retain, para ver os vetores novos.
+    recall = Recall(indexador, perms, provider, retain._indice_vetorial)
+    return Servicos(
         perms=perms,
-        armazenamento=armazenamento,
         indexador=indexador,
+        armazenamento=armazenamento,
         provider=provider,
-        modelo_emb="fake",
-        dim_emb=512,
+        retain=retain,
+        recall=recall,
+        reflect=Reflect(),
+        cliente_llm=cliente_llm,
     )
-    
-    # Usa FakeEmbeddings para testes (não precisa de API key)
-    propostas = retain.retain_conversa(request["mensagens"], state.cliente_llm)
-    
-    return [
-        {
-            "tipo": p.tipo,
-            "titulo": p.titulo,
-            "texto": p.texto,
-            "tags": p.tags,
-            "nota_existente_id": p.nota_existente_id,
-            "score_duplicado": p.score_duplicado,
-        }
-        for p in propostas
-    ]
 
 
-@app.post("/memoria/refletir", response_model=List[Dict[str, Any]])
-async def refletir(request: Dict[str, Any]) -> List[Dict[str, Any]]:
-    """Consolida observações/opiniões por entidade (refletir_conversa)."""
-    assert state.retain is not None
-    
-    # Valida payload
-    if "mensagens" not in request:
-        raise HTTPException(422, "Campo 'mensagens' é obrigatório")
-    
-    # Se não há cliente LLM, retorna lista vazia (modo de teste)
-    if state.cliente_llm is None:
-        return []
-    
-    propostas = state.retain.refletir_conversa(request["mensagens"], state.cliente_llm)
-    
-    return [
-        {
-            "tipo": p.tipo,
-            "titulo": p.titulo,
-            "texto": p.texto,
-            "tags": p.tags,
-            "nota_existente_id": p.nota_existente_id,
-            "score_duplicado": p.score_duplicado,
-        }
-        for p in state.retain.refletir_conversa(request["mensagens"], state.cliente_llm)
-    ]
-
-
-@app.get("/memoria/stats", response_model=Dict[str, int])
-async def stats() -> Dict[str, int]:
-    """Estatísticas do índice de memória."""
-    assert state.indexador is not None
-    assert state.provider is not None
-    
-    # Cria nova conexão para evitar problemas de threading com SQLite
-    import sqlite3
-    from pathlib import Path
-    db_path = state.indexador.caminho_db
-    con = sqlite3.connect(db_path)
+def _carregar_env(caminho: str = ".env") -> None:
+    p = Path(caminho)
+    if not p.is_absolute():
+        p = Path(__file__).parent / p
     try:
-        total_notas = con.execute("SELECT COUNT(*) FROM notas").fetchone()[0]
-        total_trechos = con.execute("SELECT COUNT(*) FROM trechos").fetchone()[0]
-        total_vetores = con.execute(
-            "SELECT COUNT(*) FROM vetores WHERE modelo = ? AND dim = ?",
-            (state.provider.modelo, state.provider.dim),
-        ).fetchone()[0]
-    finally:
-        con.close()
-    
+        with open(p, encoding="utf-8-sig") as f:
+            for linha in f:
+                linha = linha.strip()
+                if linha.startswith("export "):
+                    linha = linha[7:]
+                if not linha or linha.startswith("#") or "=" not in linha:
+                    continue
+                chave, valor = linha.split("=", 1)
+                os.environ[chave.strip()] = valor.strip().strip("'\"")
+    except FileNotFoundError:
+        pass
+
+
+def servicos_do_ambiente() -> Servicos:
+    """Configuração de produção: .env, MNEMO_VAULT, API da NVIDIA."""
+    _carregar_env()
+    vault = os.environ.get("MNEMO_VAULT", "vault-teste")
+    try:
+        cliente_llm: Optional[ClienteNVIDIA] = ClienteNVIDIA()
+    except ErroModeloNVIDIA:
+        cliente_llm = None
+    return construir_servicos(vault, cliente_llm=cliente_llm)
+
+
+def obter_servicos(request: Request) -> Servicos:
+    servicos: Optional[Servicos] = getattr(request.app.state, "servicos", None)
+    if servicos is None:
+        raise HTTPException(503, "Memória não inicializada")
+    return servicos
+
+
+def _proposta_dict(p: Any) -> Dict[str, Any]:
     return {
-        "total_notas": total_notas,
-        "total_trechos": total_trechos,
-        "total_vetores": total_vetores,
+        "tipo": p.tipo,
+        "titulo": p.titulo,
+        "texto": p.texto,
+        "tags": p.tags,
+        "nota_existente_id": p.nota_existente_id,
+        "score_duplicado": p.score_duplicado,
     }
 
 
-@app.post("/memoria/limpar", response_model=Dict[str, Any])
-async def limpar_memoria() -> Dict[str, Any]:
-    """Limpa todos os dados da memória (vetores, trechos, FTS, notas memoria/)."""
-    if not state.indexador:
-        raise HTTPException(503, "Índice não inicializado")
-    
-    try:
-        from mnemo import Permissoes
-        perms = Permissoes("vault-teste")
-        indexador = Indexador(perms)
-        
-        # Apaga vetores
-        indexador.con.execute("DELETE FROM vetores")
-        # Apaga trechos e FTS
-        indexador.con.execute("DELETE FROM trechos_fts")
-        indexador.con.execute("DELETE FROM trechos")
-        indexador.con.execute("DELETE FROM notas WHERE caminho LIKE 'memoria/%'")
-        indexador.con.commit()
-        
-        # Limpa índice em memória
-        # (reiniciaria o índice)
-        
+# --- Aplicação ---
+
+
+def criar_app(servicos: Optional[Servicos] = None) -> FastAPI:
+    """Cria a aplicação. Com `servicos` injetados (testes) o arranque não toca no ambiente."""
+
+    @asynccontextmanager
+    async def lifespan(app: FastAPI) -> AsyncIterator[None]:
+        proprios = getattr(app.state, "servicos", None) is None
+        if proprios:
+            app.state.servicos = servicos_do_ambiente()
+        try:
+            yield
+        finally:
+            if proprios and app.state.servicos is not None:
+                app.state.servicos.fechar()
+                app.state.servicos = None
+
+    app = FastAPI(
+        title="Mnemo Memoria API",
+        description="API para o subsistema de memória do Mnemo (Retain/Recall/Reflect)",
+        version="0.1.0",
+        lifespan=lifespan,
+    )
+    app.state.servicos = servicos
+
+    # Endpoints síncronos (def): o FastAPI corre-os numa threadpool, por isso chamadas
+    # bloqueantes (embeddings, LLM) não param o servidor. O lock serializa o acesso ao SQLite.
+
+    @app.get("/memoria/recall")
+    def recall_endpoint(
+        s: Servicos = Depends(obter_servicos),
+        consulta: str = Query(..., description="Consulta de busca"),
+        k: int = Query(8, ge=1, le=50),
+        budget_tokens: int = Query(2000, ge=100, le=10000),
+        tags: Optional[List[str]] = Query(None),
+        tipos: Optional[List[str]] = Query(None),
+        explicar: bool = Query(False),
+    ) -> Dict[str, Any]:
+        """Busca híbrida (BM25 + embeddings) com fusão RRF."""
+        with s.lock:
+            resultados = s.recall.recall(
+                consulta=consulta,
+                k=k,
+                budget_tokens=budget_tokens,
+                tags=tags,
+                tipos=tipos,
+                explicar=explicar,
+            )
+        itens = [
+            {
+                "nota_id": r.nota_id,
+                "nota_caminho": r.nota_caminho,
+                "nota_titulo": r.nota_titulo,
+                "trecho_id": r.trecho_id,
+                "trecho_ordem": r.trecho_ordem,
+                "titulo_secao": r.titulo_secao,
+                "texto": r.texto,
+                "score": r.score,
+                "origem": r.origem,
+                "citacao": r.citacao,
+                "modo": r.modo,
+            }
+            for r in resultados
+        ]
+        modo = itens[0]["modo"] if itens else "vazio"
+        return {"resultados": itens, "modo": modo}
+
+    @app.post("/memoria/retain/vault")
+    def retain_vault(
+        s: Servicos = Depends(obter_servicos), reparar: bool = Query(False)
+    ) -> Dict[str, Any]:
+        """Sincroniza todo o vault (retain_vault)."""
+        with s.lock:
+            rel = s.retain.retain_vault(reparar=reparar)
+        return {
+            "novas": rel.novas,
+            "atualizadas": rel.atualizadas,
+            "inalteradas": rel.inalteradas,
+            "removidas": rel.removidas,
+            "trechos_novos": rel.trechos_novos,
+            "trechos_atualizados": rel.trechos_atualizados,
+            "embeddings_novos": rel.embeddings_novos,
+            "embeddings_pendentes": rel.embeddings_pendentes,
+            "erros": rel.erros,
+        }
+
+    @app.post("/memoria/retain/conversa")
+    def retain_conversa(
+        pedido: RetainConversaRequest, s: Servicos = Depends(obter_servicos)
+    ) -> List[Dict[str, Any]]:
+        """Extrai memórias de uma conversa via LLM; grava-as como rascunhos."""
+        if s.cliente_llm is None:
+            raise HTTPException(503, "LLM não configurado (falta NVIDIA_API_KEY?)")
+        with s.lock:
+            propostas = s.retain.retain_conversa(pedido.mensagens, s.cliente_llm)
+        return [_proposta_dict(p) for p in propostas]
+
+    @app.post("/memoria/refletir")
+    def refletir(
+        pedido: ReflectRequest, s: Servicos = Depends(obter_servicos)
+    ) -> List[Dict[str, Any]]:
+        """Consolida observações/opiniões por entidade (refletir_conversa)."""
+        if s.cliente_llm is None:
+            raise HTTPException(503, "LLM não configurado (falta NVIDIA_API_KEY?)")
+        with s.lock:
+            propostas = s.retain.refletir_conversa(pedido.mensagens, s.cliente_llm)
+        return [_proposta_dict(p) for p in propostas]
+
+    @app.get("/memoria/stats")
+    def stats(s: Servicos = Depends(obter_servicos)) -> Dict[str, int]:
+        """Estatísticas do índice de memória."""
+        with s.lock:
+            con = s.indexador.con
+            return {
+                "total_notas": con.execute("SELECT COUNT(*) FROM notas").fetchone()[0],
+                "total_trechos": con.execute("SELECT COUNT(*) FROM trechos").fetchone()[0],
+                "total_vetores": con.execute(
+                    "SELECT COUNT(*) FROM vetores WHERE modelo = ? AND dim = ?",
+                    (s.provider.modelo, s.provider.dim),
+                ).fetchone()[0],
+            }
+
+    @app.post("/memoria/limpar")
+    def limpar_memoria(s: Servicos = Depends(obter_servicos)) -> Dict[str, Any]:
+        """Limpa vetores, trechos, FTS por trechos e as notas memoria/ do índice."""
+        with s.lock:
+            con = s.indexador.con
+            try:
+                con.execute("DELETE FROM vetores")
+                con.execute("DELETE FROM trechos_fts")
+                con.execute("DELETE FROM trechos")
+                con.execute("DELETE FROM notas WHERE caminho LIKE 'memoria/%'")
+                # Sem isto, o próximo retain veria as notas como "inalteradas" e não reconstruía nada.
+                con.execute("UPDATE notas SET trechos_md5 = NULL")
+                con.commit()
+            except Exception as e:
+                con.rollback()
+                raise HTTPException(500, f"Erro ao limpar memória: {e}")
+            # O índice vetorial em memória também tem de ser reposto.
+            incrementar_versao_vetores(con)
+            s.retain._indice_vetorial.invalidar()
+            s.retain._indice_carregado = False
         return {"sucesso": True, "mensagem": "Memória limpa completamente"}
-    except Exception as e:
-        raise HTTPException(500, f"Erro ao limpar memória: {e}")
+
+    @app.get("/health")
+    def health(request: Request) -> Dict[str, Any]:
+        return {
+            "status": "ok",
+            "memoria_inicializada": getattr(request.app.state, "servicos", None) is not None,
+        }
+
+    return app
 
 
-# Health check
-@app.get("/health")
-async def health() -> Dict[str, Any]:
-    return {"status": "ok", "memoria_inicializada": state.recall is not None}
+# Instância para `uvicorn api_memoria:app`. Os serviços só são construídos no arranque
+# (lifespan), nunca ao importar o módulo.
+app = criar_app()
 
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=8000)
+
+    # 127.0.0.1: a API dá acesso às notas e não tem autenticação, por isso não pode ficar
+    # exposta à rede local.
+    uvicorn.run(
+        app,
+        host=os.environ.get("MNEMO_HOST", "127.0.0.1"),
+        port=int(os.environ.get("MNEMO_PORT", "8000")),
+    )

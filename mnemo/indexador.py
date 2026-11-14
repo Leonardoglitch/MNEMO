@@ -133,13 +133,21 @@ def extrair_tags(conteudo: str) -> List[str]:
 
 
 class Indexador:
-    def __init__(self, perms: Permissoes, caminho_db: Optional[str] = None) -> None:
+    def __init__(
+        self,
+        perms: Permissoes,
+        caminho_db: Optional[str] = None,
+        *,
+        check_same_thread: bool = True,
+    ) -> None:
         self.perms = perms
         self.caminho_db = (
             Path(caminho_db) if caminho_db else perms.raiz / ".vault" / "index.db"
         )
         self.caminho_db.parent.mkdir(parents=True, exist_ok=True)
-        self.con = sqlite3.connect(self.caminho_db)
+        # check_same_thread=False: necessário na API (FastAPI corre handlers noutras threads).
+        # Quem partilha a ligação entre threads deve serializar o acesso (ver Servicos.lock).
+        self.con = sqlite3.connect(self.caminho_db, check_same_thread=check_same_thread)
         self.con.executescript(_ESQUEMA)
         self._migrar_schema()
 
@@ -206,6 +214,16 @@ class Indexador:
         ).fetchone()
         if linha:
             nota_id = linha[0]
+            # Os trechos da memória não têm cascade efetivo (foreign_keys está desligado): sem isto
+            # ficavam órfãos e uma nota nova podia herdar os trechos de outra ao reutilizar o id.
+            if self.con.execute(
+                "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'trechos'"
+            ).fetchone():
+                self.con.execute(
+                    "DELETE FROM trechos_fts WHERE rowid IN (SELECT id FROM trechos WHERE nota_id = ?)",
+                    (nota_id,),
+                )
+                self.con.execute("DELETE FROM trechos WHERE nota_id = ?", (nota_id,))
             self.con.execute("DELETE FROM nota_tags WHERE nota_id = ?", (nota_id,))
             self.con.execute("DELETE FROM notas_fts WHERE rowid = ?", (linha[0],))
             self.con.execute("DELETE FROM notas WHERE id = ?", (linha[0],))

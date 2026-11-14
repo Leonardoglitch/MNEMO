@@ -11,7 +11,7 @@ from pathlib import Path
 from typing import Optional
 
 # Versão actual do esquema (incrementar a cada migração)
-ESQUEMA_VERSAO = 3
+ESQUEMA_VERSAO = 4
 
 
 ESQUEMA_MEMORIA = """
@@ -101,6 +101,14 @@ def migrar(con: sqlite3.Connection) -> None:
     if versao_atual < 3:
         # Índices já criados no ESQUEMA_MEMORIA (IF NOT EXISTS)
         pass
+
+    # Migração v3 -> v4: md5 do conteúdo a partir do qual os trechos foram construídos.
+    # notas.md5 pertence ao Indexador (que o atualiza em reindexar_tudo); se o Retain o usasse
+    # para detetar alterações, nunca criaria trechos para notas já indexadas.
+    if versao_atual < 4:
+        cols = {row[1] for row in con.execute("PRAGMA table_info(notas)")}
+        if "trechos_md5" not in cols:
+            con.execute("ALTER TABLE notas ADD COLUMN trechos_md5 TEXT")
 
     # Atualiza versão
     definir_versao(con, ESQUEMA_VERSAO)

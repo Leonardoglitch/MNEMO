@@ -130,9 +130,11 @@ class Retain:
 
     def _gravar_trechos(self, nota_id: int, trechos: List[Trecho]) -> None:
         """Substitui trechos da nota (mesma transação: trechos + trechos_fts)."""
-        # Remove antigos
-        self.indexador.con.execute("DELETE FROM trechos WHERE nota_id = ?", (nota_id,))
+        # Remove antigos. A FTS tem de ser apagada ANTES de trechos: a subquery precisa dos ids.
+        # (Com a ordem inversa ficavam linhas FTS órfãs e o novo trecho, ao reutilizar o rowid,
+        # dava "constraint failed" ao reprocessar uma nota alterada.)
         self.indexador.con.execute("DELETE FROM trechos_fts WHERE rowid IN (SELECT id FROM trechos WHERE nota_id = ?)", (nota_id,))
+        self.indexador.con.execute("DELETE FROM trechos WHERE nota_id = ?", (nota_id,))
 
         for t in trechos:
             cur = self.indexador.con.execute(
@@ -201,17 +203,21 @@ class Retain:
         md5 = hashlib.md5(conteudo.encode("utf-8")).hexdigest()
 
         # Verifica se nota já existe e se MD5 é igual
+        # Compara com trechos_md5 (conteúdo de que os trechos atuais foram construídos), não com
+        # notas.md5, que o Indexador também atualiza.
         row = self.indexador.con.execute(
-            "SELECT id, md5 FROM notas WHERE caminho = ?", (caminho,)
+            "SELECT id, trechos_md5 FROM notas WHERE caminho = ?", (caminho,)
         ).fetchone()
 
         if row:
-            nota_id, md5_guardado = row
-            if md5_guardado == md5:
+            nota_id, trechos_md5 = row
+            if trechos_md5 == md5:
                 relatorio.inalteradas += 1
                 return False, None  # sem alterações
-            # MD5 diferente -> atualiza
-            relatorio.atualizadas += 1
+            if trechos_md5 is None:
+                relatorio.novas += 1  # primeira vez que a memória vê esta nota
+            else:
+                relatorio.atualizadas += 1  # conteúdo mudou
         else:
             # Nova nota
             cur = self.indexador.con.execute(
@@ -245,14 +251,16 @@ class Retain:
             try:
                 self._gerar_embeddings_lote(pendentes)
                 relatorio.embeddings_novos += len(pendentes)
-                # Invalida índice vetorial
-                self._indice_vetorial.invalidar()
             except Exception as e:
-                # Marca como pendente para retry posterior
+                # Fica pendente: trechos_md5 não é gravado, por isso o próximo retain
+                # (ou /reparar) volta a tentar os embeddings desta nota.
                 relatorio.embeddings_pendentes.append(caminho)
                 relatorio.erros.append(f"Embeddings falharam para {caminho}: {e}")
                 return True, f"Embeddings pendentes: {e}"
 
+        self.indexador.con.execute(
+            "UPDATE notas SET trechos_md5 = ? WHERE id = ?", (md5, nota_id)
+        )
         return True, None
 
     def retain_vault(self, reparar: bool = False) -> RelatorioRetain:
@@ -295,6 +303,14 @@ class Retain:
                     pass
 
         self.indexador.con.commit()
+
+        # Se algo mudou, o índice vetorial em memória ficou desatualizado: recarrega-o agora,
+        # para o Recall (que partilha este índice) usar logo os vetores novos.
+        if relatorio.novas or relatorio.atualizadas or relatorio.removidas or relatorio.embeddings_novos:
+            self._indice_vetorial.invalidar()
+            self._indice_carregado = False
+            self._carregar_indice_vetorial()
+
         return relatorio
 
     def retain_conversa(

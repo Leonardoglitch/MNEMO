@@ -1,356 +1,209 @@
-#!/usr/bin/env python3
-"""Testes de integração para a API FastAPI do subsistema Memória."""
+"""Testes de integração da API FastAPI do subsistema de memória.
 
-import sys
-import os
+Tudo é injetado: base de dados em memória, FakeEmbeddings e um LLM falso. Nada toca no disco
+(fora do tmp_path), na rede ou no .env.
+"""
+
 import json
-import shutil
 from pathlib import Path
+from typing import Any, Dict, Iterator, List, Tuple
 
 import pytest
 from fastapi.testclient import TestClient
 
-# Adiciona o diretório do projeto ao path
-sys.path.insert(0, str(Path(__file__).parent.parent))
+from api_memoria import Servicos, construir_servicos, criar_app
+from mnemo.memoria import FakeEmbeddings
 
-# Configura variáveis de ambiente ANTES de importar a API
-os.environ.setdefault("NVIDIA_API_KEY", "test-fake-key")
-os.environ.setdefault("MNEMO_VAULT", "vault-teste-api")
 
-# Remove vault de teste anterior se existir
-test_vault_path = Path("vault-teste-api")
-if test_vault_path.exists():
-    shutil.rmtree(test_vault_path)
-test_vault_path.mkdir()
-(test_vault_path / "notas").mkdir()
+class LLMFalso:
+    """Imita ClienteNVIDIA.conversar(); devolve sempre a resposta JSON configurada."""
 
-# Carrega .env se existir
-def carregar_env(caminho: str = ".env") -> None:
-    from pathlib import Path
-    if not Path(caminho).is_absolute():
-        caminho = str(Path(__file__).parent.parent / caminho)
-    try:
-        with open(caminho, encoding="utf-8-sig") as f:
-            for linha in f:
-                linha = linha.strip()
-                if not linha or linha.startswith("#") or "=" not in linha:
-                    continue
-                chave, valor = linha.split("=", 1)
-                os.environ[chave.strip()] = valor.strip().strip("'\"")
-    except FileNotFoundError:
-        pass
+    def __init__(self, resposta: Any) -> None:
+        self.resposta = resposta
+        self.chamadas = 0
 
-import os
-import shutil
-from pathlib import Path
+    def conversar(self, mensagens: List[Dict[str, Any]], ferramentas: Any = None, stream: bool = False) -> Tuple[Dict[str, Any], Dict[str, int]]:
+        self.chamadas += 1
+        return {"role": "assistant", "content": json.dumps(self.resposta)}, {
+            "prompt_tokens": 1,
+            "completion_tokens": 1,
+            "total_tokens": 2,
+        }
 
-carregar_env()
 
-from api_memoria import app, state
-from mnemo import Permissoes
-from mnemo.memoria import (
-    Recall, Retain, Reflect, FakeEmbeddings, IndiceVetorial
-)
-from mnemo.indexador import Indexador
-from mnemo.armazenamento import Armazenamento
-from mnemo import Permissoes
-from mnemo.memoria import FakeEmbeddings, IndiceVetorial
-
-import pytest
-from fastapi.testclient import TestClient
-
-@pytest.fixture(autouse=True)
-def setup_test_env():
-    """Configura ambiente de teste antes de cada teste."""
-    os.environ["NVIDIA_API_KEY"] = "test-fake-key"
-    os.environ["MNEMO_VAULT"] = "vault-teste-api"
-    yield
+MEMORIA_EXTRAIDA = [
+    {"tipo": "preferencia", "titulo": "Preferência de café", "texto": "O utilizador prefere café sem açúcar.", "tags": ["bebidas"]}
+]
+REFLEXAO = [
+    {
+        "entidade": "Projeto X",
+        "observacao": "Tem poucos recursos.",
+        "opiniao": "Pode falhar por falta de recursos.",
+        "confianca": 0.7,
+        "tags": ["projetos"],
+        "fonte": "conversa",
+    }
+]
 
 
 @pytest.fixture
-def client():
-    """Cliente de teste FastAPI com estado mockado usando FakeEmbeddings."""
-    from api_memoria import app, state
-    from mnemo import Permissoes
-    from mnemo.memoria import (
-        Recall, Retain, Reflect, FakeEmbeddings, IndiceVetorial
+def vault(tmp_path: Path) -> Path:
+    raiz = tmp_path / "vault"
+    (raiz / "notas").mkdir(parents=True)
+    (raiz / ".vault").mkdir()
+    (raiz / ".vault" / "config.json").write_text('{"todas_as_pastas": true}', encoding="utf-8")
+    (raiz / "notas" / "cafe.md").write_text(
+        "---\ntags: [bebidas]\n---\n# Café\n\nPrefiro café sem açúcar de manhã.\n", encoding="utf-8"
     )
-    from mnemo.indexador import Indexador
-    from mnemo.armazenamento import Armazenamento
-    from mnemo import Permissoes
-    from mnemo.memoria import FakeEmbeddings, IndiceVetorial
-    import os
-
-    # Configura estado global para testes
-    from api_memoria import state
-
-    # Configura vault de teste
-    os.environ.setdefault("NVIDIA_API_KEY", "test-fake-key")
-    os.environ.setdefault("MNEMO_VAULT", "vault-teste-api")
-
-    # Remove banco de dados de teste anterior se existir
-    test_db_path = Path("vault-teste-api/.vault/index.db")
-    if test_db_path.exists():
-        test_db_path.unlink(missing_ok=True)
-
-    state.perms = Permissoes("vault-teste-api")
-    state.indexador = Indexador(state.perms, caminho_db=":memory:")
-    state.indexador.reindexar_tudo()
-    state.armazenamento = Armazenamento(state.perms)
-
-    # Usa FakeEmbeddings para testes
-    state.provider = FakeEmbeddings(dim=512)
-    state.indice = IndiceVetorial(512)
-
-    state.retain = Retain(
-        perms=Permissoes("vault-teste-api"),
-        armazenamento=Armazenamento(Permissoes("vault-teste-api")),
-        indexador=Indexador(Permissoes("vault-teste-api"), caminho_db=":memory:"),
-        provider=FakeEmbeddings(dim=512),
-        modelo_emb="fake",
-        dim_emb=512,
+    (raiz / "notas" / "projeto.md").write_text(
+        "# Projeto\n\nO projeto usa SQLite e FTS5 para a pesquisa lexical.\n", encoding="utf-8"
     )
+    return raiz
 
-    from mnemo.memoria import Recall, Reflect, IndiceVetorial
-    state.recall = Recall(
-        Indexador(Permissoes("vault-teste-api"), caminho_db=":memory:"),
-        Permissoes("vault-teste-api"),
-        FakeEmbeddings(dim=512),
-        IndiceVetorial(512),
+
+@pytest.fixture
+def llm() -> LLMFalso:
+    return LLMFalso(MEMORIA_EXTRAIDA)
+
+
+@pytest.fixture
+def servicos(vault: Path, llm: LLMFalso) -> Iterator[Servicos]:
+    s = construir_servicos(
+        str(vault), provider=FakeEmbeddings(dim=64), cliente_llm=llm, caminho_db=":memory:"
     )
-        state.reflect = Reflect()
-        state.provider = FakeEmbeddings(dim=512)
-        state.cliente_llm = None
-    state.reflect = Reflect()
-    state.provider = FakeEmbeddings(dim=512)
-    state.cliente_llm = None
-
-    from fastapi.testclient import TestClient
-    client = TestClient(app)
-    
-    yield client
-    
-    # Cleanup: fecha conexões do banco de dados
-    if state.indexador:
-        state.indexador.fechar()
+    yield s
+    s.fechar()
 
 
-class TestHealthEndpoint:
-    """Testes para o endpoint /health."""
-
-    def test_health_ok(self, client):
-        """Health check deve retornar status ok."""
-        response = client.get("/health")
-        assert response.status_code == 200
-        data = response.json()
-        assert data["status"] == "ok"
-        assert "memoria_inicializada" in data
+@pytest.fixture
+def client(servicos: Servicos) -> Iterator[TestClient]:
+    # `with` corre o lifespan; como os serviços foram injetados, não lê .env nem abre bases em disco.
+    with TestClient(criar_app(servicos)) as c:
+        yield c
 
 
-class TestRecallEndpoint:
-    """Testes para o endpoint /memoria/recall."""
-
-    def test_recall_basico(self, client):
-        """Recall básico deve funcionar."""
-        response = client.get("/memoria/recall", params={"consulta": "teste"})
-        assert response.status_code == 200
-        data = response.json()
-        assert "resultados" in data
-        assert "modo" in data
-        assert data["modo"] in ("hibrido", "lexical", "semantica")
-        assert isinstance(data["resultados"], list)
-
-    def test_recall_com_parametros(self, client):
-        """Recall com parâmetros opcionais."""
-        response = client.get(
-            "/memoria/recall",
-            params={
-                "consulta": "RAG",
-                "k": 5,
-                "budget_tokens": 1000,
-                "explicar": True,
-            },
-        )
-        assert response.status_code == 200
-        data = response.json()
-        assert "resultados" in data
-        assert "modo" in data
-        if data["resultados"]:
-            r = data["resultados"][0]
-            assert "nota_id" in r
-            assert "nota_caminho" in r
-            assert "score" in r
-            assert "origem" in r
-            assert "citacao" in r
-            assert "modo" in r
-
-    def test_recall_sem_consulta(self, client):
-        """Recall sem consulta deve retornar 422."""
-        response = client.get("/memoria/recall")
-        assert response.status_code == 422
-
-    def test_recall_k_invalido(self, client):
-        """Recall com k inválido deve retornar 422."""
-        response = client.get("/memoria/recall", params={"consulta": "teste", "k": 0})
-        assert response.status_code == 422
-        response = client.get("/memoria/recall", params={"consulta": "teste", "k": 100})
-        assert response.status_code == 422
+@pytest.fixture
+def client_sem_llm(vault: Path) -> Iterator[TestClient]:
+    s = construir_servicos(str(vault), provider=FakeEmbeddings(dim=64), cliente_llm=None, caminho_db=":memory:")
+    with TestClient(criar_app(s)) as c:
+        yield c
+    s.fechar()
 
 
-class TestRetainVaultEndpoint:
-    """Testes para o endpoint /memoria/retain/vault."""
-
-    def test_retain_vault_basico(self, client):
-        """Retain vault básico deve funcionar."""
-        response = client.post("/memoria/retain/vault")
-        assert response.status_code == 200
-        data = response.json()
-        assert "novas" in data
-        assert "atualizadas" in data
-        assert "inalteradas" in data
-        assert "removidas" in data
-        assert "trechos_novos" in data
-        assert "trechos_atualizados" in data
-        assert "embeddings_novos" in data
-        assert "embeddings_pendentes" in data
-        assert "erros" in data
-        assert all(isinstance(v, int) for k, v in data.items() if k not in ("embeddings_pendentes", "erros"))
-        assert isinstance(data["embeddings_pendentes"], list)
-        assert isinstance(data["erros"], list)
-
-    def test_retain_vault_reparar(self, client):
-        """Retain vault com reparar=True."""
-        response = client.post("/memoria/retain/vault", params={"reparar": True})
-        assert response.status_code == 200
-        data = response.json()
-        assert "novas" in data
+def test_health(client: TestClient) -> None:
+    r = client.get("/health")
+    assert r.status_code == 200
+    assert r.json() == {"status": "ok", "memoria_inicializada": True}
 
 
-class TestRetainConversaEndpoint:
-    """Testes para o endpoint /memoria/retain/conversa."""
-
-    def test_retain_conversa_sem_mensagens(self, client):
-        """Retain conversa com lista vazia."""
-        response = client.post("/memoria/retain/conversa", json={"mensagens": []})
-        assert response.status_code == 200
-        data = response.json()
-        assert isinstance(data, list)
-
-    def test_retain_conversa_com_mensagens(self, client):
-        """Retain conversa com mensagens."""
-        response = client.post(
-            "/memoria/retain/conversa",
-            json={
-                "mensagens": [
-                    {"role": "user", "content": "Olá, quero guardar que prefiro café."},
-                    {"role": "assistant", "content": "Entendido, prefere café."},
-                ]
-            },
-        )
-        assert response.status_code == 200
-        data = response.json()
-        assert isinstance(data, list)
-
-    def test_retain_conversa_invalido(self, client):
-        """Retain conversa com payload inválido."""
-        response = client.post("/memoria/retain/conversa", json={})
-        assert response.status_code == 422
+def test_sem_servicos_devolve_503() -> None:
+    # Sem servicos e sem lifespan (TestClient sem `with`): o endpoint recusa em vez de rebentar.
+    c = TestClient(criar_app(None))
+    assert c.get("/memoria/stats").status_code == 503
 
 
-class TestRefletirEndpoint:
-    """Testes para o endpoint /memoria/refletir."""
-
-    def test_refletir_sem_mensagens(self, client):
-        """Refletir com lista vazia."""
-        response = client.post("/memoria/refletir", json={"mensagens": []})
-        assert response.status_code == 200
-        data = response.json()
-        assert isinstance(data, list)
-
-    def test_refletir_com_mensagens(self, client):
-        """Refletir com mensagens."""
-        response = client.post(
-            "/memoria/refletir",
-            json={
-                "mensagens": [
-                    {"role": "user", "content": "Acho que o projeto X vai falhar."},
-                    {"role": "assistant", "content": "Por que acha isso?"},
-                    {"role": "user", "content": "Porque não tem recursos suficientes."},
-                ]
-            },
-        )
-        assert response.status_code == 200
-        data = response.json()
-        assert isinstance(data, list)
-
-    def test_refletir_invalido(self, client):
-        """Refletir com payload inválido."""
-        response = client.post("/memoria/refletir", json={})
-        assert response.status_code == 422
+def test_api_nao_cria_base_em_disco(client: TestClient, vault: Path) -> None:
+    client.post("/memoria/retain/vault")
+    assert not (vault / ".vault" / "index.db").exists()
 
 
-class TestStatsEndpoint:
-    """Testes para o endpoint /memoria/stats."""
+class TestRetainVault:
+    def test_primeira_sincronizacao(self, client: TestClient) -> None:
+        d = client.post("/memoria/retain/vault").json()
+        assert d["novas"] == 2
+        assert d["trechos_novos"] >= 2
+        assert d["embeddings_novos"] >= 2
+        assert d["erros"] == [] and d["embeddings_pendentes"] == []
 
-    def test_stats(self, client):
-        """Stats deve retornar contadores."""
-        response = client.get("/memoria/stats")
-        assert response.status_code == 200
-        data = response.json()
-        assert "total_notas" in data
-        assert "total_trechos" in data
-        assert "total_vetores" in data
-        assert all(isinstance(v, int) for v in data.values())
-        assert all(v >= 0 for v in data.values())
+    def test_segunda_sincronizacao_e_idempotente(self, client: TestClient) -> None:
+        client.post("/memoria/retain/vault")
+        d = client.post("/memoria/retain/vault").json()
+        assert d["novas"] == 0 and d["inalteradas"] == 2 and d["embeddings_novos"] == 0
 
-
-class TestLimparEndpoint:
-    """Testes para o endpoint /memoria/limpar."""
-
-    def test_limpar(self, client):
-        """Limpar memória."""
-        response = client.post("/memoria/limpar")
-        assert response.status_code == 200
-        data = response.json()
-        assert "sucesso" in data
-        assert "mensagem" in data
-        assert data["sucesso"] is True
+    def test_reparar(self, client: TestClient) -> None:
+        assert client.post("/memoria/retain/vault", params={"reparar": True}).status_code == 200
 
 
-class TestValidationErrors:
-    """Testes de erros de validação."""
+class TestRecall:
+    def test_encontra_nota_depois_do_retain(self, client: TestClient) -> None:
+        client.post("/memoria/retain/vault")
+        d = client.get("/memoria/recall", params={"consulta": "café açúcar"}).json()
+        assert d["resultados"], "devia encontrar a nota do café"
+        assert d["resultados"][0]["nota_caminho"] == "cafe.md"
+        campos = {"nota_id", "nota_caminho", "nota_titulo", "trecho_id", "trecho_ordem", "titulo_secao", "texto", "score", "origem", "citacao", "modo"}
+        assert campos <= set(d["resultados"][0])
 
-    def test_recall_k_negativo(self, client):
-        response = client.get("/memoria/recall", params={"consulta": "teste", "k": -1})
-        assert response.status_code == 422
+    def test_usa_vetores_novos_sem_reiniciar(self, client: TestClient) -> None:
+        """O Recall partilha o índice vetorial do Retain: depois do retain fica híbrido."""
+        client.post("/memoria/retain/vault")
+        d = client.get("/memoria/recall", params={"consulta": "SQLite FTS5"}).json()
+        assert d["modo"] == "hibrido"
 
-    def test_recall_budget_negativo(self, client):
-        response = client.get("/memoria/recall", params={"consulta": "teste", "budget_tokens": -1})
-        assert response.status_code == 422
+    def test_sem_dados_devolve_vazio(self, client: TestClient) -> None:
+        d = client.get("/memoria/recall", params={"consulta": "café"}).json()
+        assert d["resultados"] == [] and d["modo"] == "vazio"
 
-    def test_recall_budget_alto(self, client):
-        response = client.get("/memoria/recall", params={"consulta": "teste", "budget_tokens": 20000})
-        assert response.status_code == 422
-
-
-class TestResponseStructure:
-    """Verifica estrutura das respostas."""
-
-    def test_recall_resultado_estrutura(self, client):
-        """Resultado de recall tem todos os campos esperados."""
-        response = client.get("/memoria/recall", params={"consulta": "teste"})
-        assert response.status_code == 200
-        data = response.json()
-        if data["resultados"]:
-            r = data["resultados"][0]
-            campos_obrigatorios = [
-                "nota_id", "nota_caminho", "nota_titulo",
-                "trecho_id", "trecho_ordem", "titulo_secao",
-                "texto", "score", "origem", "citacao", "modo"
-            ]
-            for campo in campos_obrigatorios:
-                assert campo in data["resultados"][0], f"Campo faltando: {campo}"
+    @pytest.mark.parametrize(
+        "params",
+        [{}, {"consulta": "x", "k": 0}, {"consulta": "x", "k": 51}, {"consulta": "x", "k": -1},
+         {"consulta": "x", "budget_tokens": -1}, {"consulta": "x", "budget_tokens": 20000}],
+    )
+    def test_parametros_invalidos(self, client: TestClient, params: Dict[str, Any]) -> None:
+        assert client.get("/memoria/recall", params=params).status_code == 422
 
 
-if __name__ == "__main__":
-    pytest.main([__file__, "-v"])
+class TestRetainConversa:
+    MSGS = {"mensagens": [{"role": "user", "content": "Prefiro café sem açúcar."}]}
+
+    def test_cria_rascunho(self, client: TestClient, vault: Path) -> None:
+        r = client.post("/memoria/retain/conversa", json=self.MSGS)
+        assert r.status_code == 200
+        d = r.json()
+        assert [p["titulo"] for p in d] == ["Preferência de café"]
+        rascunho = vault / "notas" / "memoria" / "preferência-de-café.md"
+        assert rascunho.exists()
+        assert "status: rascunho" in rascunho.read_text(encoding="utf-8")
+
+    def test_payload_invalido(self, client: TestClient) -> None:
+        assert client.post("/memoria/retain/conversa", json={}).status_code == 422
+
+    def test_sem_llm_devolve_503(self, client_sem_llm: TestClient) -> None:
+        assert client_sem_llm.post("/memoria/retain/conversa", json=self.MSGS).status_code == 503
+
+
+class TestRefletir:
+    MSGS = {"mensagens": [{"role": "user", "content": "Acho que o projeto X vai falhar."}]}
+
+    def test_consolida_com_uma_unica_chamada_ao_llm(self, servicos: Servicos, client: TestClient) -> None:
+        servicos.cliente_llm = LLMFalso(REFLEXAO)
+        r = client.post("/memoria/refletir", json=self.MSGS)
+        assert r.status_code == 200
+        assert len(r.json()) == 1
+        assert servicos.cliente_llm.chamadas == 1  # antes o endpoint chamava o LLM duas vezes
+
+    def test_payload_invalido(self, client: TestClient) -> None:
+        assert client.post("/memoria/refletir", json={}).status_code == 422
+
+    def test_sem_llm_devolve_503(self, client_sem_llm: TestClient) -> None:
+        assert client_sem_llm.post("/memoria/refletir", json=self.MSGS).status_code == 503
+
+
+class TestStatsELimpar:
+    def test_stats_antes_e_depois_do_retain(self, client: TestClient) -> None:
+        antes = client.get("/memoria/stats").json()
+        assert antes["total_trechos"] == 0 and antes["total_vetores"] == 0
+        client.post("/memoria/retain/vault")
+        depois = client.get("/memoria/stats").json()
+        assert depois["total_notas"] == 2
+        assert depois["total_trechos"] >= 2 and depois["total_vetores"] >= 2
+
+    def test_limpar_apaga_e_o_retain_reconstroi(self, client: TestClient) -> None:
+        client.post("/memoria/retain/vault")
+        assert client.post("/memoria/limpar").json()["sucesso"] is True
+        s = client.get("/memoria/stats").json()
+        assert s["total_trechos"] == 0 and s["total_vetores"] == 0
+        # Depois de limpar, um novo retain tem de voltar a construir tudo.
+        client.post("/memoria/retain/vault")
+        s = client.get("/memoria/stats").json()
+        assert s["total_trechos"] >= 2 and s["total_vetores"] >= 2
+        assert client.get("/memoria/recall", params={"consulta": "café"}).json()["resultados"]
