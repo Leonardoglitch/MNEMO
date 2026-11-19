@@ -16,6 +16,8 @@ env/
 
 # Environment variables
 .env
+agent.md
+
 
 # Vault generated files
 **/.vault/index.db

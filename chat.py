@@ -340,8 +340,9 @@ def main() -> None:
         indice = None
 
         if memoria_auto:
+            embed_model = config.get("NVIDIA_EMBED_MODEL") or "nvidia/nemotron-3.5-embed-1b"
             provider = NvidiaEmbeddings(
-                modelo=config.get("NVIDIA_EMBED_MODEL"),
+                modelo=embed_model,
             )
             # Usa a dimensão real do provider (detectada via API), não o config
             indice = IndiceVetorial(provider.dim)

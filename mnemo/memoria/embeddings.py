@@ -46,7 +46,7 @@ class NvidiaEmbeddings:
         self.chave_api = chave_api or os.environ.get("NVIDIA_API_KEY")
         if not self.chave_api:
             raise ErroModeloNVIDIA("Falta NVIDIA_API_KEY")
-        self.modelo = modelo or os.environ.get("NVIDIA_EMBED_MODEL", "nvidia/nemotron-3.5-embed-1b")
+        self.modelo = modelo or os.environ.get("NVIDIA_EMBED_MODEL") or "nvidia/nemotron-3.5-embed-1b"
         self.url_base = url_base
         self.timeout = timeout
         self.max_retries = max_retries
