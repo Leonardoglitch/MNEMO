@@ -132,6 +132,18 @@ def extrair_tags(conteudo: str) -> List[str]:
     return []
 
 
+def extrair_frontmatter_campo(conteudo: str, campo: str) -> Optional[str]:
+    """Extrai um campo específico do frontmatter YAML (tipo, status, entidade, etc.)."""
+    frontmatter, _ = separar_frontmatter(conteudo)
+    for linha in frontmatter:
+        if linha.lower().startswith(f"{campo.lower()}:"):
+            valor = linha.split(":", 1)[1].strip()
+            if not valor:
+                return None
+            return valor.strip("'\"")
+    return None
+
+
 class Indexador:
     def __init__(
         self,
@@ -160,6 +172,23 @@ class Indexador:
         if "md5" not in cols:
             self.con.execute("ALTER TABLE notas ADD COLUMN md5 TEXT")
             self.con.execute("CREATE INDEX IF NOT EXISTS idx_notas_md5 ON notas(md5)")
+        # Migração para F7: colunas tipo, status, entidade
+        if "tipo" not in cols:
+            self.con.execute("ALTER TABLE notas ADD COLUMN tipo TEXT")
+            self.con.execute("CREATE INDEX IF NOT EXISTS idx_notas_tipo ON notas(tipo)")
+        if "status" not in cols:
+            self.con.execute("ALTER TABLE notas ADD COLUMN status TEXT DEFAULT 'ativo'")
+            self.con.execute("CREATE INDEX IF NOT EXISTS idx_notas_status ON notas(status)")
+        if "entidade" not in cols:
+            self.con.execute("ALTER TABLE notas ADD COLUMN entidade TEXT")
+            self.con.execute("CREATE INDEX IF NOT EXISTS idx_notas_entidade ON notas(entidade)")
+        if "modificado_ns" in cols:
+            # Verifica se o índice já existe
+            idx_exists = self.con.execute(
+                "SELECT 1 FROM sqlite_master WHERE type = 'index' AND name = 'idx_notas_modificado'"
+            ).fetchone()
+            if not idx_exists:
+                self.con.execute("CREATE INDEX IF NOT EXISTS idx_notas_modificado ON notas(modificado_ns)")
         self.con.commit()
 
     # --- helpers internos ---
@@ -172,6 +201,10 @@ class Indexador:
         titulo = extrair_titulo(conteudo, alvo.stem)
         tags = extrair_tags(conteudo)
         tags_json = json.dumps(tags, ensure_ascii=False)
+        # Extrai campos do frontmatter para filtros avançados (F7)
+        tipo = extrair_frontmatter_campo(conteudo, "tipo")
+        status = extrair_frontmatter_campo(conteudo, "status")
+        entidade = extrair_frontmatter_campo(conteudo, "entidade")
         _, corpo = separar_frontmatter(conteudo)  # o frontmatter não polui os excertos
         mtime = alvo.stat().st_mtime_ns
         md5 = hashlib.md5(conteudo.encode("utf-8")).hexdigest()
@@ -181,8 +214,8 @@ class Indexador:
         if linha:
             nota_id = linha[0]
             self.con.execute(
-                "UPDATE notas SET titulo = ?, modificado_ns = ?, tags = ?, md5 = ? WHERE id = ?",
-                (titulo, mtime, tags_json, md5, nota_id),
+                "UPDATE notas SET titulo = ?, modificado_ns = ?, tags = ?, md5 = ?, tipo = ?, status = ?, entidade = ? WHERE id = ?",
+                (titulo, mtime, tags_json, md5, tipo, status, entidade, nota_id),
             )
             self.con.execute("DELETE FROM notas_fts WHERE rowid = ?", (nota_id,))
             # Atualiza nota_tags: remove antigas, insere novas
@@ -194,8 +227,8 @@ class Indexador:
                 )
         else:
             cur = self.con.execute(
-                "INSERT INTO notas (caminho, titulo, modificado_ns, tags, md5) VALUES (?, ?, ?, ?, ?)",
-                (rel, titulo, mtime, tags_json, md5),
+                "INSERT INTO notas (caminho, titulo, modificado_ns, tags, md5, tipo, status, entidade) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                (rel, titulo, mtime, tags_json, md5, tipo, status, entidade),
             )
             nota_id = cur.lastrowid
             for tag in tags:

@@ -187,14 +187,20 @@ def criar_app(servicos: Optional[Servicos] = None) -> FastAPI:
     @app.get("/memoria/recall")
     def recall_endpoint(
         s: Servicos = Depends(obter_servicos),
-        consulta: str = Query(..., description="Consulta de busca"),
-        k: int = Query(8, ge=1, le=50),
-        budget_tokens: int = Query(2000, ge=100, le=10000),
-        tags: Optional[List[str]] = Query(None),
-        tipos: Optional[List[str]] = Query(None),
-        explicar: bool = Query(False),
+    consulta: str = Query(..., description="Consulta de busca"),
+    k: int = Query(8, ge=1, le=50),
+    budget_tokens: int = Query(2000, ge=100, le=10000),
+    tags: Optional[List[str]] = Query(None, description="Filtrar por tags (todas devem estar presentes)"),
+    tipos: Optional[List[str]] = Query(None, description="Filtrar por tipo: facto, decisao, preferencia, experiencia, observacao"),
+    status: Optional[List[str]] = Query(None, description="Filtrar por status: ativo, rascunho, arquivado"),
+    entidade: Optional[str] = Query(None, description="Filtrar por entidade (ex: Joao, Projeto Alpha)"),
+    since: Optional[str] = Query(None, description="Data ISO (ex: 2026-01-01) - so notas modificadas depois"),
+    until: Optional[str] = Query(None, description="Data ISO (ex: 2026-12-31) - so notas modificadas antes"),
+    peso_recencia: float = Query(0.1, ge=0, le=1, description="Peso da recencia no ranking final"),
+    peso_confianca: float = Query(0.15, ge=0, le=1, description="Peso da confianca no ranking final"),
+    explicar: bool = Query(False, description="Inclui breakdown do score na resposta"),
     ) -> Dict[str, Any]:
-        """Busca híbrida (BM25 + embeddings) com fusão RRF."""
+        """Busca hibrida avancada (BM25 + embeddings) com fusao RRF, filtros e ranking personalizado."""
         with s.lock:
             resultados = s.recall.recall(
                 consulta=consulta,
@@ -202,6 +208,12 @@ def criar_app(servicos: Optional[Servicos] = None) -> FastAPI:
                 budget_tokens=budget_tokens,
                 tags=tags,
                 tipos=tipos,
+                status=status,
+                entidade=entidade,
+                since=since,
+                until=until,
+                peso_recencia=peso_recencia,
+                peso_confianca=peso_confianca,
                 explicar=explicar,
             )
         itens = [

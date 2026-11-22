@@ -39,7 +39,7 @@ from mnemo.memoria.esquema import (
     meta_set,
 )
 from mnemo.memoria.retain import Retain
-from mnemo.memoria.recall import Recall
+from mnemo.memoria.recall import Recall, RecallParams
 from mnemo.memoria.reflect import Reflect, verificar_citacoes
 
 __all__ = [

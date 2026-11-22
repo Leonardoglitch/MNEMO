@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import List, Optional, Set, Tuple, Any
+from typing import List, Optional, Set, Tuple, Any, Dict
 
 import numpy as np
 
@@ -16,6 +16,71 @@ from mnemo.memoria import (
     ConsultaCache,
     estimar_tokens,
 )
+from datetime import datetime, timezone
+from dataclasses import dataclass
+
+
+@dataclass
+class RecallParams:
+    """Parâmetros avançados para busca recall."""
+    k: int = 8
+    budget_tokens: int = 2000
+    tags: Optional[List[str]] = None
+    tipos: Optional[List[str]] = None
+    status: Optional[List[str]] = None
+    entidade: Optional[str] = None
+    since_ns: Optional[int] = None
+    until_ns: Optional[int] = None
+    peso_recencia: float = 0.1
+    peso_confianca: float = 0.15
+    explicar: bool = False
+
+    @staticmethod
+    def from_query_params(
+        k: int = 8,
+        budget_tokens: int = 2000,
+        tags: Optional[List[str]] = None,
+        tipos: Optional[List[str]] = None,
+        status: Optional[List[str]] = None,
+        entidade: Optional[str] = None,
+        since: Optional[str] = None,
+        until: Optional[str] = None,
+        peso_recencia: float = 0.1,
+        peso_confianca: float = 0.15,
+        explicar: bool = False,
+    ) -> "RecallParams":
+        """Cria RecallParams a partir de parâmetros de query (strings ISO para datas)."""
+        since_ns = None
+        until_ns = None
+        if since:
+            try:
+                dt = datetime.fromisoformat(since)
+                if dt.tzinfo is None:
+                    dt = dt.replace(tzinfo=timezone.utc)
+                since_ns = int(dt.timestamp() * 1_000_000_000)
+            except ValueError:
+                pass
+        if until:
+            try:
+                dt = datetime.fromisoformat(until)
+                if dt.tzinfo is None:
+                    dt = dt.replace(tzinfo=timezone.utc)
+                until_ns = int(dt.timestamp() * 1_000_000_000)
+            except ValueError:
+                pass
+        return RecallParams(
+            k=k,
+            budget_tokens=budget_tokens,
+            tags=tags,
+            tipos=tipos,
+            status=status,
+            entidade=entidade,
+            since_ns=since_ns,
+            until_ns=until_ns,
+            peso_recencia=peso_recencia,
+            peso_confianca=peso_confianca,
+            explicar=explicar,
+        )
 
 
 class Recall:
@@ -44,43 +109,65 @@ class Recall:
         self.chars_por_token = chars_por_token
         self._cache_consulta = ConsultaCache()
 
-    def _ids_permitidos(self, tags: Optional[List[str]] = None, tipos: Optional[List[str]] = None) -> List[int]:
-        """Devolve IDs de notas permitidas (filtro por pastas + tags + tipos)."""
+    def _ids_permitidos(
+        self,
+        tags: Optional[List[str]] = None,
+        tipos: Optional[List[str]] = None,
+        status: Optional[List[str]] = None,
+        entidade: Optional[str] = None,
+        since_ns: Optional[int] = None,
+        until_ns: Optional[int] = None,
+    ) -> List[int]:
+        """Devolve IDs de notas permitidas (filtro por pastas + tags + tipos + status + entidade + temporal)."""
         # Começa com todas as notas permitidas por pastas
-        # Usa o método _notas_validas do indexador e depois mapeia para IDs
         validas = self.indexador._notas_validas()
         if not validas:
             return []
 
-        # Obtém IDs das notas válidas
+        # Obtém IDs das notas válidas com filtros adicionais no SQL
         placeholders = ",".join("?" for _ in validas)
-        rows = self.indexador.con.execute(
-            f"SELECT id FROM notas WHERE caminho IN ({placeholders})",
-            list(validas.keys()),
-        ).fetchall()
-        ids = [r[0] for r in rows]
+        conditions = ["caminho IN (" + placeholders + ")"]
+        params_list: List[Any] = list(validas.keys())
 
-        # Filtro adicional por tags
+        # Filtro por tags
         if tags:
             tags_norm = [t.lower() for t in tags]
-            placeholders = ",".join("?" for _ in tags_norm)
-            query = f"""
-                SELECT nota_id FROM nota_tags
-                WHERE tag IN ({placeholders})
-                GROUP BY nota_id
-                HAVING COUNT(DISTINCT tag) = ?
-            """
-            params = list(tags_norm) + [len(tags_norm)]
-            rows = self.indexador.con.execute(query, params).fetchall()
-            tag_ids = {r[0] for r in rows}
-            ids = [i for i in ids if i in tag_ids]
+            ph_tags = ",".join("?" for _ in tags_norm)
+            conditions.append(f"id IN (SELECT nota_id FROM nota_tags WHERE tag IN ({ph_tags}) GROUP BY nota_id HAVING COUNT(DISTINCT tag) = ?)")
+            params_list.extend(tags_norm)
+            params_list.append(len(tags_norm))
 
-        # Filtro por tipos (frontmatter tipo:)
+        # Filtro por tipo
         if tipos:
-            # TODO: implementar filtro por tipo quando a coluna existir
-            pass
+            ph_tipos = ",".join("?" for _ in tipos)
+            conditions.append(f"tipo IN ({ph_tipos})")
+            params_list.extend(tipos)
 
-        return ids
+        # Filtro por status
+        if status:
+            ph_status = ",".join("?" for _ in status)
+            conditions.append(f"status IN ({ph_status})")
+            params_list.extend(status)
+
+        # Filtro por entidade
+        if entidade:
+            conditions.append("entidade = ?")
+            params_list.append(entidade)
+
+        # Filtro temporal since
+        if since_ns is not None:
+            conditions.append("modificado_ns >= ?")
+            params_list.append(since_ns)
+
+        # Filtro temporal until
+        if until_ns is not None:
+            conditions.append("modificado_ns <= ?")
+            params_list.append(until_ns)
+
+        where_clause = " AND ".join(conditions)
+        query = f"SELECT id FROM notas WHERE {where_clause}"
+        rows = self.indexador.con.execute(query, params_list).fetchall()
+        return [r[0] for r in rows]
 
     def _bm25(self, consulta: str, ids_permitidos: List[int], n: int) -> List[Tuple[int, int, float]]:
         """Busca lexical no trechos_fts. Devolve [(trecho_id, nota_id, score_bm25), ...]."""
@@ -239,17 +326,88 @@ class Recall:
                 contagem_por_nota[nid] = cnt + 1
         return resultado
 
+    def _calcular_score_final(
+        self,
+        score_rrf: float,
+        nid: int,
+        peso_recencia: float,
+        peso_confianca: float,
+    ) -> Tuple[float, Dict[str, float]]:
+        """Calcula score final combinando RRF + recência + confiança.
+        
+        Returns: (score_final, breakdown_dict)
+        """
+        if peso_recencia == 0 and peso_confianca == 0:
+            return score_rrf, {"rrf": score_rrf}
+        
+        # Busca modificado_ns e confianca (do frontmatter status/tipo)
+        row = self.indexador.con.execute(
+            "SELECT modificado_ns, tipo, status, entidade FROM notas WHERE id = ?",
+            (nid,),
+        ).fetchone()
+        
+        if not row:
+            return score_rrf, {"rrf": score_rrf}
+        
+        modificado_ns, tipo, status, entidade = row
+        breakdown = {"rrf": score_rrf}
+        score_final = score_rrf
+        
+        # Recência: normaliza para 0-1 baseado em janela de 30 dias
+        if peso_recencia > 0 and modificado_ns:
+            import time
+            agora_ns = int(time.time() * 1_000_000_000)
+            janela_ns = 30 * 24 * 60 * 60 * 1_000_000_000  # 30 dias
+            idade_ns = agora_ns - modificado_ns
+            recencia_norm = max(0.0, 1.0 - (idade_ns / janela_ns))
+            score_final += peso_recencia * recencia_norm
+            breakdown["recencia"] = recencia_norm
+            breakdown["recencia_weight"] = peso_recencia
+        
+        # Confiança: extrai do frontmatter (campo confianca ou score_duplicado)
+        # Para notas de memória, pode haver confianca no frontmatter
+        # Como não temos coluna confianca, usamos heurística baseada em status/tipo
+        if peso_confianca > 0:
+            confianca = 0.5  # default
+            if status == "ativo":
+                confianca = 0.8
+            elif status == "rascunho":
+                confianca = 0.4
+            elif tipo == "facto":
+                confianca = 0.9
+            elif tipo == "decisao":
+                confianca = 0.85
+            elif tipo == "observacao":
+                confianca = 0.6
+            score_final += peso_confianca * confianca
+            breakdown["confianca"] = confianca
+            breakdown["confianca_weight"] = peso_confianca
+        
+        return score_final, breakdown
+
     def _empacotar_resultados(
         self,
-        fundidos: List[Tuple[int, int, float, dict[str, int]]],
+        fundidos: List[Tuple[int, int, float, Dict[str, Any]]],
         k: int,
         budget_tokens: int,
+        peso_recencia: float = 0.1,
+        peso_confianca: float = 0.15,
+        explicar: bool = False,
     ) -> List[Resultado]:
-        """Converte para objetos Resultado, respeitando budget de tokens."""
+        """Converte para objetos Resultado, respeitando budget de tokens e aplicando ranking final."""
+        # Primeiro calcula scores finais para todos os candidatos
+        candidatos_com_score = []
+        for tid, nid, score_rrf, origem in fundidos:
+            score_final, breakdown = self._calcular_score_final(score_rrf, nid, peso_recencia, peso_confianca)
+            candidatos_com_score.append((tid, nid, score_final, origem, breakdown))
+        
+        # Reordena por score final
+        candidatos_com_score.sort(key=lambda x: x[2], reverse=True)
+        
         resultados: List[Resultado] = []
         tokens_acumulados = 0
 
-        for tid, nid, score, origem in fundidos[:k]:
+        for tid, nid, score_final, origem, breakdown in candidatos_com_score[:k]:
             row = self.indexador.con.execute(
                 "SELECT nota_id, ordem, titulo_secao, texto, tokens FROM trechos WHERE id = ?",
                 (tid,),
@@ -261,11 +419,11 @@ class Recall:
 
             # Nota info
             row_nota = self.indexador.con.execute(
-                "SELECT caminho, titulo FROM notas WHERE id = ?", (nid,)
+                "SELECT caminho, titulo, tipo, status, entidade, modificado_ns FROM notas WHERE id = ?", (nid,)
             ).fetchone()
             if not row_nota:
                 continue
-            caminho, titulo = row_nota
+            caminho, titulo, tipo, status, entidade, modificado_ns = row_nota
 
             # Verifica permissão final (defesa em profundidade)
             try:
@@ -277,6 +435,21 @@ class Recall:
             if tokens_acumulados + tokens_trecho > budget_tokens and resultados:
                 break
 
+            # Adiciona info de explainability se pedido
+            origem_final = dict(origem)
+            if explicar:
+                origem_final["explicar"] = {
+                    "lex_count": len([1 for o in origem if "lex" in o]),
+                    "sem_count": len([1 for o in origem if "sem" in o]),
+                    "score_breakdown": breakdown,
+                    "nota_info": {
+                        "tipo": tipo,
+                        "status": status,
+                        "entidade": entidade,
+                        "modificado_ns": modificado_ns,
+                    },
+                }
+
             r = Resultado(
                 nota_id=nid,
                 nota_caminho=caminho,
@@ -285,8 +458,8 @@ class Recall:
                 trecho_ordem=ordem,
                 titulo_secao=titulo_secao or "",
                 texto=texto,
-                score=score,
-                origem=origem,
+                score=score_final,
+                origem=origem_final,
                 citacao=f"[[{caminho}]]",
                 modo="hibrido" if ("lex" in origem and "sem" in origem) else ("lexical" if "lex" in origem else "semantica"),
             )
@@ -303,10 +476,60 @@ class Recall:
         budget_tokens: int = 2000,
         tags: Optional[List[str]] = None,
         tipos: Optional[List[str]] = None,
+        status: Optional[List[str]] = None,
+        entidade: Optional[str] = None,
+        since: Optional[str] = None,
+        until: Optional[str] = None,
+        peso_recencia: float = 0.1,
+        peso_confianca: float = 0.15,
         explicar: bool = False,
     ) -> List[Resultado]:
-        """Busca híbrida principal."""
-        ids_permitidos = self._ids_permitidos(tags, tipos)
+        """Busca híbrida principal com filtros avançados.
+        
+        Args:
+            consulta: Texto da consulta
+            k: Número máximo de resultados
+            budget_tokens: Orçamento de tokens para resultados
+            tags: Filtrar por tags (todas devem estar presentes)
+            tipos: Filtrar por tipo (facto, decisao, preferencia, experiencia, observacao)
+            status: Filtrar por status (ativo, rascunho, arquivado)
+            entidade: Filtrar por entidade (ex: "João", "Projeto Alpha")
+            since: Data ISO (ex: "2026-01-01") - só notas modificadas depois
+            until: Data ISO (ex: "2026-12-31") - só notas modificadas antes
+            peso_recencia: Peso da recência no ranking final (0-1)
+            peso_confianca: Peso da confiança no ranking final (0-1)
+            explicar: Se True, inclui breakdown do score na origem
+        """
+        from datetime import datetime, timezone
+        
+        # Converte since/until strings para nanossegundos
+        since_ns = None
+        until_ns = None
+        if since:
+            try:
+                dt = datetime.fromisoformat(since)
+                if dt.tzinfo is None:
+                    dt = dt.replace(tzinfo=timezone.utc)
+                since_ns = int(dt.timestamp() * 1_000_000_000)
+            except ValueError:
+                pass
+        if until:
+            try:
+                dt = datetime.fromisoformat(until)
+                if dt.tzinfo is None:
+                    dt = dt.replace(tzinfo=timezone.utc)
+                until_ns = int(dt.timestamp() * 1_000_000_000)
+            except ValueError:
+                pass
+        
+        ids_permitidos = self._ids_permitidos(
+            tags=tags,
+            tipos=tipos,
+            status=status,
+            entidade=entidade,
+            since_ns=since_ns,
+            until_ns=until_ns,
+        )
 
         # Busca lexical
         lex = self._bm25(consulta, ids_permitidos, self.candidatos_por_pesquisa)
@@ -320,16 +543,7 @@ class Recall:
         # Diversidade
         fundidos = self._diversificar(fundidos)
 
-        # Empacota resultados
-        resultados = self._empacotar_resultados(fundidos, k, budget_tokens)
-
-        if explicar:
-            # Adiciona info de debug
-            for r in resultados:
-                r.origem["explicar"] = {
-                    "lex_count": len(lex),
-                    "sem_count": len(sem),
-                    "ids_permitidos": len(ids_permitidos),
-                }
+        # Empacota resultados com ranking final
+        resultados = self._empacotar_resultados(fundidos, k, budget_tokens, peso_recencia, peso_confianca, explicar)
 
         return resultados
