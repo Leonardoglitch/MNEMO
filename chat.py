@@ -807,16 +807,21 @@ def main() -> None:
                     ui.console.print("[muted]Nenhuma memória para extrair desta conversa.[/muted]")
                     continue
                 ui.console.print(f"[info]Encontradas {len(propostas)} memórias candidatas:[/info]")
+                caminhos_criados = []
                 for i, p in enumerate(propostas, 1):
                     status = f" (duplicado, score={p.score_duplicado:.2f})" if p.nota_existente_id else ""
                     ui.console.print(f"  {i}. [{p.tipo}] {p.titulo}{status}")
                     ui.console.print(f"     Tags: {', '.join(p.tags) if p.tags else '(sem tags)'}")
+                    if p.caminho:
+                        caminhos_criados.append(p.caminho)
                 if ui.confirm("\nGravar estas memórias como rascunhos?"):
-                    # As propostas já foram gravadas como rascunho pela retain_conversa
                     ui.console.print("[success]Memórias guardadas como rascunhos em notas/memoria/.[/success]")
-                    ui.console.print("[info]Use /memoria stats para ver ou edite as notas em notas/memoria/ para confirmar.[/info]")
+                    ui.console.print("[info]Use /confirmar para confirmar ou /rejeitar para apagar.[/info]")
                 else:
-                    ui.console.print("[muted]Operação cancelada.[/muted]")
+                    # Apaga os rascunhos criados se o utilizador cancelar
+                    for caminho in caminhos_criados:
+                        retain.apagar_rascunho(caminho)
+                    ui.console.print("[muted]Operação cancelada. Rascunhos apagados.[/muted]")
                 continue
 
             if texto == "/refletir":
@@ -841,26 +846,96 @@ def main() -> None:
                     ui.console.print("[muted]Operação cancelada.[/muted]")
                 continue
 
+            if texto == "/confirmar":
+                if not memoria_auto:
+                    ui.console.print("[muted]Memória desativada (memoria_auto=false no config)[/muted]")
+                    continue
+                assert retain is not None
+                parts = shlex.split(texto)
+                if len(parts) < 2:
+                    ui.console.print("[warning]Uso:[/warning] /confirmar <caminho1> [caminho2] ...")
+                    continue
+                caminhos = parts[1:]
+                try:
+                    resultado = retain.confirmar_rascunhos(caminhos)
+                    ui.console.print(f"[success]{resultado['confirmados']} rascunhos confirmados.[/success]")
+                    if resultado['erros']:
+                        for erro in resultado['erros']:
+                            ui.console.print(f"[error]{erro}[/error]")
+                except Exception as e:
+                    ui.console.print(f"[error]Erro ao confirmar: {e}[/error]")
+                continue
+
+            if texto.startswith("/rejeitar"):
+                if not memoria_auto:
+                    ui.console.print("[muted]Memória desativada (memoria_auto=false no config)[/muted]")
+                    continue
+                assert retain is not None
+                parts = shlex.split(texto)
+                if len(parts) < 2:
+                    ui.console.print("[warning]Uso:[/warning] /rejeitar <caminho1> [caminho2] ...")
+                    continue
+                caminhos = parts[1:]
+                try:
+                    resultado = retain.rejeitar_rascunhos(caminhos)
+                    ui.console.print(f"[success]{resultado['rejeitados']} rascunhos rejeitados.[/success]")
+                    if resultado['erros']:
+                        for erro in resultado['erros']:
+                            ui.console.print(f"[error]{erro}[/error]")
+                except Exception as e:
+                    ui.console.print(f"[error]Erro ao rejeitar: {e}[/error]")
+                continue
+
             if texto.lower() in {"/ajuda", "/help"}:
                 ui.console.print(Panel(
-                    "  /salvar         Grava checkpoint da conversa em historico/\n"
-                    "  /historico      Lista últimos registos em historico/\n"
-                    "  /vault          Mostra vault atual\n"
-                    "  /vault <path>   Troca vault (reinicia necessário)\n"
-                    "  /modelo <id>    Troca modelo NVIDIA\n"
-                    "  /limpar         Limpa ecrã\n"
-                    "  /config         Mostra configuração\n"
-                    "  /config theme dark|light|auto   Altera tema\n"
-                    "  /config model <id>              Define modelo padrão\n"
-                    "  /config vault <path>            Define vault padrão\n"
-                    "  /config timeout <seg>           Define timeout API\n"
-                    "  /config fallback <m1,m2,...>    Define modelos fallback\n"
-                    "  /config tokens on|off           Ativa/desativa contador de tokens\n"
-                    "  /config reset                   Reseta configuração\n"
+                    "NAVEGAÇÃO & HISTÓRICO\n"
+                    "  /historico                    # TUI interativa (↑↓, Enter=carregar, q=sair)\n"
+                    "  /historico --since 2026-01-01 # TUI filtrada por data\n"
+                    "  /historico --model nemotron   # TUI filtrada por modelo\n"
+                    "  /historico search python      # Busca textual com preview\n"
+                    "  /historico load 2026-09-27    # Carrega sessão e continua conversa\n"
+                    "  /historico export backup.json # Exporta tudo para JSON\n"
+                    "  /historico export b.json --since 2026-01-01  # Exporta filtrado\n"
+                    "  /historico import backup.json # Importa (pula duplicados)\n\n"
+                    "VAULT & CONFIG\n"
+                    "  /vault                        # Mostra vault atual\n"
+                    "  /vault ~/meu-vault            # Troca vault (reiniciar)\n"
+                    "  /status                       # Estado completo do sistema\n"
+                    "  /config                       # Mostra config\n"
+                    "  /config theme dark            # Tema escuro\n"
+                    "  /config model nvidia/nemotron-3-ultra  # Modelo padrão\n"
+                    "  /config vault ~/meu-vault     # Vault padrão\n"
+                    "  /config timeout 60            # Timeout 60s\n"
+                    "  /config fallback m1,m2        # Modelos fallback\n\n"
+                    "TAGS\n"
+                    "  /tag <caminho> add <tag1> [tag2]  # Adiciona tag(s)\n"
+                    "  /tag <caminho> remove <tag>       # Remove tag\n"
+                    "  /tag <caminho> set <tag1> [tag2]  # Substitui todas\n"
+                    "  /tags                           # Lista todas as tags\n"
+                    "  /tags --pasta projetos           # Filtra por pasta\n"
+                    "  /tags --prefixo trab             # Autocomplete por prefixo\n\n"
+                    "MODELO\n"
+                    "  /modelo nvidia/nemotron-3-ultra  # Troca modelo (sessão)\n\n"
+                    "NOTAS (usam autocomplete Tab)\n"
+                    "  create_note projetos/plano.md     # Cria nota\n"
+                    "  read_note projetos/plano.md       # Lê nota\n"
+                    "  append_to_note projetos/plano.md  # Anexa conteúdo\n"
+                    "  search python                     # Busca semântica\n"
+                    "  list_files projetos/              # Lista pasta\n\n"
+                    "CONVERSA\n"
+                    "  /new                  # Nova conversa (limpa histórico atual)\n"
+                    "  /delete <id>          # Elimina sessão do histórico\n"
+                    "  /historico limpar     # Apaga TODO o histórico (confirmação)\n\n"
+                    "MEMÓRIA (Retain/Recall/Reflect)\n"
                     "  /memorizar       Extrai memórias da conversa (rascunhos)\n"
-                    "  /refletir        Consolida observações/opiniões por entidade (rascunhos)\n"
-                    "  /ajuda           Mostra esta ajuda\n"
-                    "  sair / exit / quit   Termina a conversa",
+                    "  /confirmar <id>          # Confirma rascunho(s) pendente(s)\n"
+                    "  /rejeitar <id>          # Elimina rascunho(s) pendente(s)\n"
+                    "  /refletir        Consolida observações/opiniões por entidade (rascunhos)\n\n"
+                    "OUTROS\n"
+                    "  /salvar         Grava checkpoint da conversa em historico/\n"
+                    "  /limpar         Limpa ecrã\n"
+                    "  sair / exit / quit   Sai (auto-save)\n"
+                    "  Ctrl+C               Pergunta confirmação (2x = força saída)",
                     title="Ajuda", border_style="info"))
                 continue
 

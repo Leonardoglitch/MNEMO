@@ -443,6 +443,7 @@ source_count: 1
                 tags=tags,
                 nota_existente_id=nota_existente_id,
                 score_duplicado=score_duplicado,
+                caminho=caminho,
             ))
 
         return propostas
@@ -565,6 +566,50 @@ source_count: 1
             ))
 
         return propostas
+
+    def apagar_rascunho(self, caminho: str) -> bool:
+        """Apaga um rascunho pelo caminho. Devolve True se apagou, False se não existia."""
+        try:
+            self.armazenamento.apagar(caminho)
+            self.indexador.remover_nota(caminho)
+            return True
+        except Exception:
+            return False
+
+    def confirmar_rascunhos(self, caminhos: List[str]) -> Dict[str, Any]:
+        """Confirma rascunhos pendentes, mudando status para 'ativo'."""
+        confirmados = 0
+        erros = []
+        for caminho in caminhos:
+            try:
+                conteudo = self.armazenamento.ler(caminho)
+                linhas = conteudo.split("\n")
+                novas_linhas = []
+                for linha in linhas:
+                    if linha.strip() == "status: rascunho":
+                        novas_linhas.append("status: ativo")
+                    else:
+                        novas_linhas.append(linha)
+                novo_conteudo = "\n".join(novas_linhas)
+                self.armazenamento.editar(caminho, novo_conteudo)
+                self.indexador.atualizar_nota(caminho)
+                confirmados += 1
+            except Exception as e:
+                erros.append(f"{caminho}: {e}")
+        return {"confirmados": confirmados, "erros": erros}
+
+    def rejeitar_rascunhos(self, caminhos: List[str]) -> Dict[str, Any]:
+        """Rejeita (apaga) rascunhos pendentes."""
+        rejeitados = 0
+        erros = []
+        for caminho in caminhos:
+            try:
+                self.armazenamento.apagar(caminho)
+                self.indexador.remover_nota(caminho)
+                rejeitados += 1
+            except Exception as e:
+                erros.append(f"{caminho}: {e}")
+        return {"rejeitados": rejeitados, "erros": erros}
 
 
 def meta_get(con: sqlite3.Connection, chave: str) -> Optional[str]:

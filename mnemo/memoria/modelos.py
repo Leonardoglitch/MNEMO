@@ -50,6 +50,7 @@ class Proposta:
     tags: list[str] = field(default_factory=list)
     nota_existente_id: Optional[int] = None  # se for atualização
     score_duplicado: float = 0.0
+    caminho: str = ""  # caminho do ficheiro onde o rascunho foi gravado
 
 
 @dataclass(slots=True)

@@ -260,6 +260,60 @@ def criar_app(servicos: Optional[Servicos] = None) -> FastAPI:
             propostas = s.retain.refletir_conversa(pedido.mensagens, s.cliente_llm)
         return [_proposta_dict(p) for p in propostas]
 
+    @app.post("/memoria/confirmar")
+    def confirmar_rascunhos(
+        caminhos: List[str], s: Servicos = Depends(obter_servicos)
+    ) -> Dict[str, Any]:
+        """Confirma rascunhos pendentes, mudando status para 'ativo'."""
+        if s.retain is None:
+            raise HTTPException(503, "Memória não inicializada")
+        with s.lock:
+            confirmados = 0
+            erros = []
+            for caminho in caminhos:
+                try:
+                    # Lê a nota atual
+                    conteudo = s.armazenamento.ler(caminho)
+                    # Atualiza status de rascunho para ativo
+                    linhas = conteudo.split("\n")
+                    novas_linhas = []
+                    for linha in linhas:
+                        if linha.strip() == "status: rascunho":
+                            novas_linhas.append("status: ativo")
+                        else:
+                            novas_linhas.append(linha)
+                    novo_conteudo = "\n".join(novas_linhas)
+                    s.armazenamento.editar(caminho, novo_conteudo)
+                    # Reindexa
+                    from mnemo.indexador import Indexador
+                    from mnemo import Permissoes
+                    idx = Indexador(Permissoes("vault-teste"))
+                    idx.atualizar_nota(caminho)
+                    confirmados += 1
+                except Exception as e:
+                    erros.append(f"{caminho}: {e}")
+            return {"confirmados": confirmados, "erros": erros}
+
+    @app.post("/memoria/rejeitar")
+    def rejeitar_rascunhos(
+        caminhos: List[str], s: Servicos = Depends(obter_servicos)
+    ) -> Dict[str, Any]:
+        """Rejeita (apaga) rascunhos pendentes."""
+        if s.retain is None:
+            raise HTTPException(503, "Memória não inicializada")
+        with s.lock:
+            rejeitados = 0
+            erros = []
+            for caminho in caminhos:
+                try:
+                    from mnemo.ferramentas import FerramentasVault
+                    with FerramentasVault("vault-teste") as ferramentas:
+                        ferramentas.executar("delete_note", {"caminho": caminho})
+                    rejeitados += 1
+                except Exception as e:
+                    erros.append(f"{caminho}: {e}")
+            return {"rejeitados": rejeitados, "erros": erros}
+
     @app.get("/memoria/stats")
     def stats(s: Servicos = Depends(obter_servicos)) -> Dict[str, int]:
         """Estatísticas do índice de memória."""
