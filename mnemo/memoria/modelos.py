@@ -51,6 +51,8 @@ class Proposta:
     nota_existente_id: Optional[int] = None  # se for atualização
     score_duplicado: float = 0.0
     caminho: str = ""  # caminho do ficheiro onde o rascunho foi gravado
+    entidade: Optional[str] = None  # entidade principal (para reflect)
+    confianca: float = 0.0  # confiança agregada 0-1 (para reflect)
 
 
 @dataclass(slots=True)

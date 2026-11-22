@@ -452,37 +452,39 @@ source_count: 1
         self,
         mensagens: List[Dict[str, Any]],
         cliente_llm: Any,  # ClienteNVIDIA ou similar com método conversar
+        consolidar: bool = True,
     ) -> List[Proposta]:
         """
-        Consolida observações por entidade e propõe opiniões com confiança (confiança).
-        Sempre cria rascunhos com tipo: observacao e confiança no frontmatter.
+        Extrai observações/opiniões da conversa via LLM.
+        Se consolidar=True, agrupa por entidade e calcula confiança agregada.
 
         Args:
             mensagens: Histórico da conversa (lista de dicts com role/content)
             cliente_llm: Cliente LLM com método conversar(mensagens, ferramentas=None, stream=False)
+            consolidar: Se True, consolida por entidade (padrão). Se False, devolve observações brutas.
 
         Returns:
             Lista de Proposta (rascunhos criados, prontos para confirmação)
         """
-        # Prompt para o LLM consolidar observações e formar opiniões
+        # Prompt para o LLM extrair observações/opiniões brutas
         prompt_sistema = (
-            "És um assistente que reflete sobre uma conversa e sintetiza observações e opiniões. "
-            "Analisa a conversa e identifica entidades (pessoas, projetos, conceitos) sobre as quais "
+            "És um assistente que analisa uma conversa e extrai observações e opiniões. "
+            "Identifica entidades (pessoas, projetos, conceitos) sobre as quais "
             "o utilizador expressou opiniões ou fez observações. "
-            "Para cada entidade, consolida as observações e forma uma opinião sintetizada com "
-            "um nível de confiança (0.0 a 1.0).\n"
+            "Para cada observação/opinião, indica a entidade, a observação, a opinião, "
+            "um nível de confiança (0.0 a 1.0) e tags.\n"
             "Devolve APENAS um array JSON com objetos no formato:\n"
-            '{"entidade": "nome da entidade", "observacao": "observação consolidada", '
-            '"opiniao": "opinião sintetizada", "confianca": 0.0-1.0, '
+            '{"entidade": "nome da entidade", "observacao": "observação", '
+            '"opiniao": "opinião", "confianca": 0.0-1.0, '
             '"tags": ["tag1", "tag2"], "fonte": "conversa"}.\n'
             "Só inclui entidades sobre as quais há opiniões ou observações claras. "
-            "Não inventes. Se não houver nada para consolidar, devolve []."
+            "Não inventes. Se não houver nada para extrair, devolve []."
         )
 
         mensagens_com_prompt = [
             {"role": "system", "content": prompt_sistema},
             *mensagens,
-            {"role": "user", "content": "Reflete sobre esta conversa e sintetiza observações e opiniões por entidade em formato JSON."},
+            {"role": "user", "content": "Analisa esta conversa e extrai observações e opiniões por entidade em formato JSON."},
         ]
 
         # Chama o LLM
@@ -507,7 +509,7 @@ source_count: 1
         if not isinstance(items, list):
             return []
 
-        propostas = []
+        propostas_brutas = []
 
         for item in items:
             if not isinstance(item, dict):
@@ -532,6 +534,8 @@ source_count: 1
 
             # Normaliza entidade para nome de ficheiro
             entidade_slug = entidade.lower().replace(" ", "-").replace("/", "-")
+            import re
+            entidade_slug = re.sub(r'[^a-z0-9\-]', '', entidade_slug)
             caminho = f"memoria/reflexao-{entidade_slug}.md"
 
             frontmatter = f"""---
@@ -557,15 +561,22 @@ source_count: 1
                 except Exception:
                     pass
 
-            propostas.append(Proposta(
+            propostas_brutas.append(Proposta(
                 tipo="observacao",
                 titulo=f"Reflexão: {entidade}",
                 texto=f"Observação: {observacao}\n\nOpinião: {opiniao}",
                 tags=tags,
                 score_duplicado=confianca,
+                caminho=caminho,
+                entidade=entidade,
+                confianca=confianca,
             ))
 
-        return propostas
+        if not consolidar:
+            return propostas_brutas
+
+        # Consolida por entidade
+        return self.consolidar_reflexoes(propostas_brutas)
 
     def apagar_rascunho(self, caminho: str) -> bool:
         """Apaga um rascunho pelo caminho. Devolve True se apagou, False se não existia."""
@@ -610,6 +621,163 @@ source_count: 1
             except Exception as e:
                 erros.append(f"{caminho}: {e}")
         return {"rejeitados": rejeitados, "erros": erros}
+
+    def extrair_entidade(self, texto: str) -> Optional[str]:
+        """
+        Heurística simples para extrair entidade principal de um texto.
+        Procura nomes próprios, nomes de projetos, siglas conhecidas.
+        """
+        import re
+        # Padrões comuns: "João", "Projeto Alpha", "API", "Python", "Maria Silva", etc.
+        # Captura palavras que começam com maiúscula (incluindo acentos)
+        padroes = [
+            r'\b[A-ZÀ-Ú][a-zà-ú]+(?:\s+[A-ZÀ-Ú][a-zà-ú]+)*\b',  # Nomes próprios
+            r'\b[A-Z]{2,}\b',  # Siglas (API, HTTP, SQL)
+            r'\bProjeto\s+[A-ZÀ-Ú][a-zà-ú]+(?:\s+[A-ZÀ-Ú][a-zà-ú]+)*\b',  # Projeto X
+        ]
+        
+        # Palavras comuns que começam com maiúscula mas não são entidades
+        # (artigos, pronomes, preposições, conectivos, advérbios comuns no início de frase)
+        stopwords = {
+            'o', 'a', 'os', 'as', 'um', 'uma', 'uns', 'umas', 
+            'e', 'ou', 'mas', 'por', 'para', 'com', 'sem', 'sob', 'sobre', 'entre', 
+            'de', 'da', 'do', 'das', 'dos', 'em', 'no', 'na', 'nos', 'nas',
+            'é', 'são', 'foi', 'era', 'está', 'estão', 'tem', 'têm', 'há',
+            'este', 'esta', 'estes', 'estas', 'esse', 'essa', 'esses', 'essas',
+            'aquele', 'aquela', 'aqueles', 'aquelas',
+            'meu', 'minha', 'meus', 'minhas', 'seu', 'sua', 'seus', 'suas',
+            'nosso', 'nossa', 'nossos', 'nossas',
+            'que', 'quem', 'qual', 'quais', 'quanto', 'quanta', 'quantos', 'quantas',
+            'onde', 'quando', 'como', 'porque', 'pois', 'logo', 'então', 'porém',
+            'também', 'já', 'ainda', 'sempre', 'nunca', 'às', 'vezes', 'hoje',
+            'ontem', 'amanhã', 'agora', 'depois', 'antes', 'aqui', 'ali', 'lá',
+            'muito', 'pouco', 'bastante', 'quase', 'mesmo', 'próprio', 'certo',
+            'todo', 'toda', 'todos', 'todas', 'outro', 'outra', 'outros', 'outras',
+            'tal', 'tais', 'talvez', 'sim', 'não', 'nem', 'se', 'caso',
+            # Palavras que frequentemente iniciam frases mas não são entidades
+            'texto', 'esta', 'isto', 'isso', 'aquilo', 'algo', 'alguém', 'ninguém',
+            'cada', 'qualquer', 'nenhum', 'nenhuma', 'vários', 'várias',
+            'primeiro', 'primeira', 'último', 'última', 'próximo', 'próxima',
+            'novo', 'nova', 'novos', 'novas', 'velho', 'velha', 'velhos', 'velhas',
+            'bom', 'boa', 'bons', 'boas', 'mal', 'mau', 'maus', 'más',
+            'grande', 'pequeno', 'pequena', 'longo', 'longa', 'curto', 'curta',
+            'alto', 'alta', 'baixo', 'baixa', 'forte', 'fraco', 'fraca',
+        }
+        
+        entidades_encontradas = []
+        for padrao in padroes:
+            matches = re.findall(padrao, texto)
+            for m in matches:
+                m = m.strip()
+                if len(m) > 1 and m not in entidades_encontradas:
+                    # Filtra palavras comuns que não são entidades
+                    if m.lower() not in stopwords:
+                        entidades_encontradas.append(m)
+        
+        if entidades_encontradas:
+            # Retorna a entidade mais frequente ou a primeira
+            from collections import Counter
+            contagem = Counter(entidades_encontradas)
+            return str(contagem.most_common(1)[0][0])
+        return None
+
+    def consolidar_reflexoes(self, propostas_brutas: List[Proposta]) -> List[Proposta]:
+        """
+        Consolida reflexões brutas por entidade.
+        
+        Agrupa propostas pela entidade, calcula confiança média ponderada,
+        funde textos semelhantes (cosseno > 0.85) e cria 1 rascunho por entidade.
+        """
+        if not propostas_brutas:
+            return []
+        
+        # Agrupa por entidade
+        from collections import defaultdict
+        por_entidade = defaultdict(list)
+        
+        for p in propostas_brutas:
+            entidade = p.entidade or self.extrair_entidade(p.texto) or "Desconhecido"
+            p.entidade = entidade
+            por_entidade[entidade].append(p)
+        
+        # Para cada entidade, consolida
+        propostas_consolidadas = []
+        
+        for entidade, propostas in por_entidade.items():
+            if len(propostas) == 1:
+                # Uma só: mantém mas adiciona entidade/confianca
+                p = propostas[0]
+                p.entidade = entidade
+                p.confianca = p.score_duplicado if p.score_duplicado > 0 else 0.7
+                propostas_consolidadas.append(p)
+                continue
+            
+            # Múltiplas: consolida
+            # 1. Calcula confiança média ponderada + bonus por quantidade
+            scores = [p.score_duplicado for p in propostas if p.score_duplicado > 0]
+            if scores:
+                confianca_media = sum(scores) / len(scores)
+            else:
+                confianca_media = 0.7
+            # Bonus por mais observações (raiz quadrada, max 1.0)
+            bonus = min(0.15, (len(propostas) - 1) * 0.05)
+            confianca_final = min(1.0, confianca_media + bonus)
+            
+            # 2. Funde textos semelhantes (dedup simples por substring)
+            textos_unicos: List[str] = []
+            for p in propostas:
+                texto = p.texto
+                # Verifica se já existe texto muito similar
+                similar = False
+                for existente in textos_unicos:
+                    # Similaridade simples: se um contém o outro ou overlap > 80%
+                    if texto in existente or existente in texto:
+                        similar = True
+                        break
+                    # Overlap de palavras
+                    palavras_texto = set(texto.lower().split())
+                    palavras_existente = set(existente.lower().split())
+                    if palavras_texto and palavras_existente:
+                        overlap = len(palavras_texto & palavras_existente) / len(palavras_texto | palavras_existente)
+                        if overlap > 0.85:
+                            similar = True
+                            break
+                if not similar:
+                    textos_unicos.append(texto)
+            
+            # 3. Agrega tags únicas
+            todas_tags = []
+            for p in propostas:
+                for tag in p.tags:
+                    if tag not in todas_tags:
+                        todas_tags.append(tag)
+            # Adiciona a entidade como tag
+            if entidade not in todas_tags:
+                todas_tags.append(entidade)
+            
+            # 4. Cria proposta consolidada
+            titulo = f"Reflexão: {entidade}"
+            texto_consolidado = "\n\n---\n\n".join(textos_unicos)
+            
+            # Gera caminho único
+            entidade_slug = entidade.lower().replace(" ", "-").replace("/", "-")
+            import re
+            entidade_slug = re.sub(r'[^a-z0-9\-]', '', entidade_slug)
+            caminho = f"memoria/reflexao-{entidade_slug}.md"
+            
+            propostas_consolidadas.append(Proposta(
+                tipo="observacao",
+                titulo=titulo,
+                texto=texto_consolidado,
+                tags=todas_tags,
+                nota_existente_id=None,
+                score_duplicado=confianca_final,
+                caminho=caminho,
+                entidade=entidade,
+                confianca=confianca_final,
+            ))
+        
+        return propostas_consolidadas
 
 
 def meta_get(con: sqlite3.Connection, chave: str) -> Optional[str]:

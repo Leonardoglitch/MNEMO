@@ -824,26 +824,35 @@ def main() -> None:
                     ui.console.print("[muted]Operação cancelada. Rascunhos apagados.[/muted]")
                 continue
 
-            if texto == "/refletir":
+            if texto.startswith("/refletir"):
                 if not memoria_auto:
                     ui.console.print("[muted]Memória desativada (memoria_auto=false no config)[/muted]")
                     continue
                 assert retain is not None
                 assert cliente is not None
-                ui.console.print("[info]A refletir sobre a conversa...[/info]")
-                propostas = retain.refletir_conversa(mensagens, cliente)
+                parts = shlex.split(texto)
+                consolidar = "--bruto" not in parts
+                modo = "bruto (sem consolidação)" if not consolidar else "consolidado por entidade"
+                ui.console.print(f"[info]A refletir sobre a conversa ({modo})...[/info]")
+                propostas = retain.refletir_conversa(mensagens, cliente, consolidar=consolidar)
                 if not propostas:
                     ui.console.print("[muted]Nenhuma observação ou opinião para consolidar.[/muted]")
                     continue
                 ui.console.print(f"[info]Encontradas {len(propostas)} reflexões candidatas:[/info]")
                 for i, p in enumerate(propostas, 1):
-                    ui.console.print(f"  {i}. [observacao] {p.titulo} (confiança={p.score_duplicado:.2f})")
+                    entidade_info = f" | entidade: {p.entidade}" if getattr(p, 'entidade', None) else ""
+                    confianca_info = f" | confiança: {p.confianca:.2f}" if getattr(p, 'confianca', 0) > 0 else f" | confiança={p.score_duplicado:.2f}"
+                    ui.console.print(f"  {i}. [observacao] {p.titulo}{entidade_info}{confianca_info}")
                     ui.console.print(f"     Tags: {', '.join(p.tags) if p.tags else '(sem tags)'}")
                 if ui.confirm("\nGravar estas reflexões como rascunhos?"):
                     ui.console.print("[success]Reflexões guardadas como rascunhos em notas/memoria/reflexao-*.md.[/success]")
-                    ui.console.print("[info]Use /memoria stats para ver ou edite as notas em notas/memoria/reflexao-*.md para confirmar.[/info]")
+                    ui.console.print("[info]Use /confirmar <caminho> para confirmar ou /rejeitar <caminho> para apagar.[/info]")
                 else:
-                    ui.console.print("[muted]Operação cancelada.[/muted]")
+                    # Apaga os rascunhos criados se o utilizador cancelar
+                    for p in propostas:
+                        if p.caminho:
+                            retain.apagar_rascunho(p.caminho)
+                    ui.console.print("[muted]Operação cancelada. Rascunhos apagados.[/muted]")
                 continue
 
             if texto == "/confirmar":
@@ -930,7 +939,8 @@ def main() -> None:
                     "  /memorizar       Extrai memórias da conversa (rascunhos)\n"
                     "  /confirmar <id>          # Confirma rascunho(s) pendente(s)\n"
                     "  /rejeitar <id>          # Elimina rascunho(s) pendente(s)\n"
-                    "  /refletir        Consolida observações/opiniões por entidade (rascunhos)\n\n"
+                    "  /refletir        Consolida observações/opiniões por entidade (rascunhos)\n"
+                    "  /refletir --bruto  Extrai observações brutas sem consolidar por entidade\n\n"
                     "OUTROS\n"
                     "  /salvar         Grava checkpoint da conversa em historico/\n"
                     "  /limpar         Limpa ecrã\n"

@@ -46,6 +46,7 @@ class RetainConversaRequest(BaseModel):
 
 class ReflectRequest(BaseModel):
     mensagens: List[Dict[str, Any]]
+    consolidar: bool = True
 
 
 # --- Serviços ---
@@ -148,6 +149,9 @@ def _proposta_dict(p: Any) -> Dict[str, Any]:
         "tags": p.tags,
         "nota_existente_id": p.nota_existente_id,
         "score_duplicado": p.score_duplicado,
+        "entidade": getattr(p, "entidade", None),
+        "confianca": getattr(p, "confianca", 0.0),
+        "caminho": getattr(p, "caminho", ""),
     }
 
 
@@ -257,7 +261,7 @@ def criar_app(servicos: Optional[Servicos] = None) -> FastAPI:
         if s.cliente_llm is None:
             raise HTTPException(503, "LLM não configurado (falta NVIDIA_API_KEY?)")
         with s.lock:
-            propostas = s.retain.refletir_conversa(pedido.mensagens, s.cliente_llm)
+            propostas = s.retain.refletir_conversa(pedido.mensagens, s.cliente_llm, consolidar=pedido.consolidar)
         return [_proposta_dict(p) for p in propostas]
 
     @app.post("/memoria/confirmar")
